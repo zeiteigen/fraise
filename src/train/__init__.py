@@ -4,6 +4,8 @@ from torch import nn
 from components import device
 import torch.nn.functional as F
 
+from train.save_mgr import SaveManager
+
 
 import torch
 
@@ -24,7 +26,7 @@ class TrainingHyperparameters(TypedDict):
 
 
 
-def pretrain_transformer(transformer_model_class: nn.Module, tokenizer: Tokenizer, dataset: DatasetDict, hyperparameters: TrainingHyperparameters, model_config: dict, save_path: str):
+def pretrain_transformer(transformer_model_class: nn.Module, tokenizer: Tokenizer, dataset: DatasetDict, hyperparameters: TrainingHyperparameters, model_config: dict, save_path: str, model_name: str = "fraise_model"):
     """
     Train a model using the provided datasets and hyperparameters.
 
@@ -38,7 +40,9 @@ def pretrain_transformer(transformer_model_class: nn.Module, tokenizer: Tokenize
 
     model = transformer_model_class(model_config).to(device)
 
+    save_manager = SaveManager(save_path, model_name)
 
+    save_manager.log(f"Starting training for {hyperparameters['num_epochs']} epochs with batch size {hyperparameters['batch_size']} and learning rate {hyperparameters['learning_rate']}.")
 
 
     optimizer = torch.optim.AdamW(
@@ -47,7 +51,8 @@ def pretrain_transformer(transformer_model_class: nn.Module, tokenizer: Tokenize
         weight_decay=hyperparameters["weight_decay"],
     )
 
-    
+
+    intermediary_messages = []
 
     for epoch in range(hyperparameters["num_epochs"]):
 
@@ -77,7 +82,10 @@ def pretrain_transformer(transformer_model_class: nn.Module, tokenizer: Tokenize
                 max_norm=1.0,
             )
 
-            print("Grad norm:", grad_norm)
+            intermediary_messages.append(
+                f"Epoch {epoch + 1}/{hyperparameters['num_epochs']}, Batch Loss: {loss.item()}, Grad Norm: {grad_norm.item()}"
+            )
+            
         
             # Backward pass and optimization
             loss.backward()
@@ -98,12 +106,16 @@ def pretrain_transformer(transformer_model_class: nn.Module, tokenizer: Tokenize
                     logits.reshape(-1, logits.size(-1)),
                     target.reshape(-1),
                 )
-                print("Validation Loss:", val_loss.item())
+                intermediary_messages.append(f"Validation Loss: {val_loss.item()}")
 
-        print(f"Epoch {epoch + 1}/{hyperparameters['num_epochs']}, Loss: {loss.item()}, Validation Loss: {val_loss.item()}")
+        intermediary_messages.append(f"Epoch {epoch + 1}/{hyperparameters['num_epochs']}, Loss: {loss.item()}, Validation Loss: {val_loss.item()}")
+
+        save_manager.log("\n".join(intermediary_messages))
 
         # Save the model checkpoint
-        torch.save(model.state_dict(), f"{save_path}/model_epoch_{epoch + 1}.pt")
+        save_manager.save_checkpoint(model, optimizer)
+
+    save_manager.finish()
 
      
 

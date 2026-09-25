@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
-import subprocess
+
 
 from datasets import Dataset, DatasetDict
 from tokenizers import Tokenizer
@@ -11,6 +11,9 @@ from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 from tokenizers.models import BPE
 from tokenizers.pre_tokenizers import ByteLevel
 from tokenizers.trainers import BpeTrainer
+
+
+from helpers.get_git_commit import get_git_commit
 
 
 from datasets_mgr import (
@@ -110,23 +113,6 @@ def _train_tokenizer(
     return tokenizer
 
 
-def _git_commit() -> str | None:
-    """Return the current repository commit, when the code is in a git checkout."""
-    repository_root = Path(__file__).resolve().parents[2]
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repository_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-    commit = result.stdout.strip()
-    return commit or None
 
 
 def _read_metadata() -> list[dict[str, object]]:
@@ -277,7 +263,7 @@ def load_tokenizer(
     new_record: dict[str, object] = {
         "path": str(tokenizer_path.relative_to(TOKENIZER_DIR)),
         "vocab_size": vocab_size,
-        "git_commit": _git_commit(),
+        "git_commit": get_git_commit(),
         "dataset": dataset_name,
         "dataset_size_bytes": dataset_size_bytes,
         "trained_at": datetime.now(timezone.utc).isoformat(),
