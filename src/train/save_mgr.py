@@ -10,7 +10,7 @@ META_FILE_NAME = "model_meta.json"
 
 class SaveManager:
     def __init__(self, save_dir: str, model_name: str):
-        self.save_dir = Path(save_dir)
+        self.save_dir = Path(save_dir) / model_name
         self.model_name = model_name
 
         self.messages = []
