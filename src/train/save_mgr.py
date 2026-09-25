@@ -1,6 +1,7 @@
 """Crash-resilient checkpoint and run-manifest management."""
 
 from collections.abc import Iterable, Mapping
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,9 +12,11 @@ import time
 from helpers.get_git_commit import get_git_commit
 
 import torch
+from tokenizers import Tokenizer
 
 META_FILE_NAME = "model_meta.json"
 CHECKPOINT_SCHEMA_VERSION = 2
+TOKENIZER_FILE_NAME = "tokenizer.json"
 ConfigPath = str | Path
 
 
@@ -76,6 +79,7 @@ class SaveManager:
         model_name: str,
         *,
         manifest: dict[str, object] | None = None,
+        tokenizer: Tokenizer | None = None,
         resume_from: str | Path | None = None,
         config_paths: Iterable[ConfigPath] | ConfigPath | None = None,
     ):
@@ -102,6 +106,9 @@ class SaveManager:
             self.messages = list(self.metadata.get("all_messages", []))
             self.epochs_completed = int(self.metadata.get("epochs_completed", 0))
             self.latest_checkpoint = resume_path
+            if tokenizer is not None:
+                self._archive_tokenizer(tokenizer)
+                self._write_metadata()
             return
 
         self.save_dir = Path(save_dir) / model_name
@@ -122,7 +129,43 @@ class SaveManager:
             "all_messages": self.messages,
         }
         self._copy_config_files(config_paths)
+        if tokenizer is not None:
+            self._archive_tokenizer(tokenizer)
         self._write_metadata()
+
+    def _archive_tokenizer(self, tokenizer: Tokenizer) -> None:
+        """Store the exact tokenizer used by this run beside its checkpoints."""
+        serialized_tokenizer = tokenizer.to_str()
+        serialized_bytes = serialized_tokenizer.encode("utf-8")
+        tokenizer_sha256 = hashlib.sha256(serialized_bytes).hexdigest()
+
+        manifest = self.metadata.get("manifest")
+        tokenizer_manifest = (
+            manifest.get("tokenizer") if isinstance(manifest, dict) else None
+        )
+        expected_fingerprint = (
+            tokenizer_manifest.get("fingerprint")
+            if isinstance(tokenizer_manifest, dict)
+            else None
+        )
+        if (
+            expected_fingerprint is not None
+            and expected_fingerprint != tokenizer_sha256
+        ):
+            raise ValueError(
+                "tokenizer does not match the fingerprint recorded in the run manifest"
+            )
+
+        tokenizer_path = self.save_dir / TOKENIZER_FILE_NAME
+        temporary_path = tokenizer_path.with_name(f".{tokenizer_path.name}.tmp")
+        with temporary_path.open("wb") as tokenizer_file:
+            tokenizer_file.write(serialized_bytes)
+            tokenizer_file.flush()
+            os.fsync(tokenizer_file.fileno())
+        os.replace(temporary_path, tokenizer_path)
+
+        self.metadata["tokenizer_file"] = tokenizer_path.name
+        self.metadata["tokenizer_sha256"] = tokenizer_sha256
 
     def _copy_config_files(
         self,

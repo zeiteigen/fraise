@@ -19,6 +19,11 @@ DatasetSource: TypeAlias = Dataset | IterableDataset
 
 allowed_splits: tuple[str, ...] = ("train", "validation", "test")
 
+# This column is added while sources are combined so the training loop can
+# recover the source boundaries without loading or tokenizing a source twice.
+# The deliberately private-looking name avoids colliding with user text data.
+DATASET_NAME_COLUMN = "__fraise_dataset_name__"
+
 
 def _dataset_names(dataset: DatasetSource | DatasetDict) -> set[str]:
     """Return the non-empty dataset names associated with a source."""
@@ -53,8 +58,52 @@ def get_dataset_name(dataset: DatasetSource | DatasetDict) -> str | None:
     return "+".join(sorted(dataset_names)) or None
 
 
+def _nonnegative_size(value: object) -> int | None:
+    """Return a valid byte count, or ``None`` when metadata is unavailable."""
+    return value if isinstance(value, int) and value >= 0 else None
+
+
+def _dataset_source_size_bytes(dataset: DatasetSource) -> int | None:
+    """Return the source/download size for one map-style dataset."""
+    info = getattr(dataset, "info", None)
+    download_size = _nonnegative_size(getattr(info, "download_size", None))
+    if download_size is not None:
+        return download_size
+
+    # Datasets constructed or transformed locally may not retain the source
+    # download metadata.  Their Arrow table size is the most useful fallback.
+    if isinstance(dataset, Dataset):
+        return int(dataset.data.nbytes)
+
+    dataset_size = _nonnegative_size(getattr(info, "dataset_size", None))
+    if dataset_size is not None:
+        return dataset_size
+
+    return _nonnegative_size(getattr(info, "size_in_bytes", None))
+
+
+def _materialized_dataset_size_bytes(dataset: DatasetSource) -> int | None:
+    """Return the size of the materialized Arrow table for one dataset."""
+    if isinstance(dataset, Dataset):
+        return int(dataset.data.nbytes)
+
+    info = getattr(dataset, "info", None)
+    return _nonnegative_size(getattr(info, "dataset_size", None))
+
+
+def _sum_known_sizes(sizes: list[int | None]) -> int | None:
+    """Sum byte counts only when every contributing source has one."""
+    return sum(sizes) if all(size is not None for size in sizes) else None
+
+
 def get_dataset_size_bytes(dataset: DatasetSource | DatasetDict) -> int | None:
-    """Return the dataset size in bytes when it is available."""
+    """Return the source/download size in bytes when it is available.
+
+    Hugging Face's ``DatasetInfo.size_in_bytes`` is the sum of the download
+    and materialized Arrow sizes.  It therefore reports roughly twice the
+    source data for locally loaded datasets.  Prefer ``download_size`` here
+    so provenance and training manifests describe the input data itself.
+    """
     if not isinstance(dataset, (Dataset, IterableDataset, DatasetDict)):
         raise TypeError(
             "Expected datasets.Dataset, datasets.IterableDataset, or "
@@ -69,29 +118,28 @@ def get_dataset_size_bytes(dataset: DatasetSource | DatasetDict) -> int | None:
     sizes_from_info: list[bool] = []
 
     for source_dataset in source_datasets:
-        info = getattr(source_dataset, "info", None)
-        size = getattr(info, "size_in_bytes", None)
-        from_info = isinstance(size, int) and size >= 0
-
-        if not from_info:
-            size = getattr(info, "dataset_size", None)
-            from_info = isinstance(size, int) and size >= 0
-
-        if not from_info and isinstance(source_dataset, Dataset):
-            size = int(source_dataset.data.nbytes)
-
-        if not isinstance(size, int) or size < 0:
+        size = _dataset_source_size_bytes(source_dataset)
+        if size is None:
             return None
 
         sizes.append(size)
-        sizes_from_info.append(from_info)
+        info = getattr(source_dataset, "info", None)
+        sizes_from_info.append(
+            _nonnegative_size(getattr(info, "download_size", None)) is not None
+        )
 
     if not sizes:
         return None
 
     # DatasetDict splits loaded by Hugging Face commonly share one
-    # DatasetInfo whose size_in_bytes already covers every split.
-    if all(sizes_from_info) and len(set(sizes)) == 1:
+    # DatasetInfo whose download_size already covers every split.  Only
+    # de-duplicate when the info explicitly describes multiple splits; two
+    # independent files can legitimately have the same byte size.
+    shared_split_info = any(
+        len(getattr(getattr(source_dataset, "info", None), "splits", {}) or {}) > 1
+        for source_dataset in source_datasets
+    )
+    if shared_split_info and all(sizes_from_info) and len(set(sizes)) == 1:
         return sizes[0]
 
     return sum(sizes)
@@ -171,7 +219,9 @@ def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> D
         datasets: Non-empty sequence of compatible Hugging Face datasets.
 
     Returns:
-        A dataset containing the rows from each input dataset in order.
+        A dataset containing the rows from each input dataset in order. Named
+        sources also carry :data:`DATASET_NAME_COLUMN` so token-based training
+        can recover the source boundaries after concatenation.
 
     Raises:
         ValueError: If no dataset sources are provided.
@@ -189,12 +239,12 @@ def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> D
         for dataset_name in _dataset_names(dataset)
     }
     name = "+".join(sorted(dataset_names)) or None
-    dataset_sizes = [get_dataset_size_bytes(dataset) for dataset in datasets]
-    size_in_bytes = (
-        sum(dataset_sizes)
-        if all(dataset_size is not None for dataset_size in dataset_sizes)
-        else None
-    )
+    split_download_sizes: dict[str, list[int | None]] = {
+        split_name: [] for split_name in allowed_splits
+    }
+    split_dataset_sizes: dict[str, list[int | None]] = {
+        split_name: [] for split_name in allowed_splits
+    }
 
     for dataset in datasets:
         if not isinstance(dataset, (Dataset, IterableDataset, DatasetDict)):
@@ -211,21 +261,85 @@ def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> D
                         f"DatasetDict has an invalid split '{split_name}'. "
                         f"Allowed splits: {allowed_splits}"
                     )
-                splits[split_name].append(split_dataset)
+                source_name = get_dataset_name(split_dataset)
+                if source_name is None:
+                    source_names = _dataset_names(dataset)
+                    if len(source_names) == 1:
+                        source_name = next(iter(source_names))
+                splits[split_name].append(
+                    _add_dataset_name_column(split_dataset, source_name)
+                )
+                split_download_sizes[split_name].append(
+                    _dataset_source_size_bytes(split_dataset)
+                )
+                split_dataset_sizes[split_name].append(
+                    _materialized_dataset_size_bytes(split_dataset)
+                )
         else:
-            splits["train"].append(dataset)
+            source_name = get_dataset_name(dataset)
+            splits["train"].append(
+                _add_dataset_name_column(dataset, source_name)
+            )
+            split_download_sizes["train"].append(
+                _dataset_source_size_bytes(dataset)
+            )
+            split_dataset_sizes["train"].append(
+                _materialized_dataset_size_bytes(dataset)
+            )
 
-    info = (
-        DatasetInfo(dataset_name=name, size_in_bytes=size_in_bytes)
-        if name is not None or size_in_bytes is not None
-        else None
+    combined_splits: dict[str, Dataset] = {}
+    for split_name, split_datasets in splits.items():
+        if not split_datasets:
+            continue
+
+        download_size = _sum_known_sizes(split_download_sizes[split_name])
+        dataset_size = _sum_known_sizes(split_dataset_sizes[split_name])
+        size_in_bytes = (
+            download_size + dataset_size
+            if download_size is not None and dataset_size is not None
+            else None
+        )
+        info = (
+            DatasetInfo(
+                dataset_name=name,
+                download_size=download_size,
+                dataset_size=dataset_size,
+                size_in_bytes=size_in_bytes,
+            )
+            if name is not None
+            or download_size is not None
+            or dataset_size is not None
+            else None
+        )
+        combined_splits[split_name] = concatenate_datasets(
+            split_datasets,
+            info=info,
+        )
+
+    return DatasetDict(combined_splits)
+
+
+def _add_dataset_name_column(
+    dataset: Dataset,
+    dataset_name: str | None,
+) -> Dataset:
+    """Keep the source name when map-style datasets are concatenated."""
+    if dataset_name is None:
+        return dataset
+
+    if DATASET_NAME_COLUMN in dataset.column_names:
+        existing_names = set(dataset[DATASET_NAME_COLUMN])
+        if existing_names != {dataset_name}:
+            raise ValueError(
+                f"{DATASET_NAME_COLUMN!r} already contains source names "
+                f"{sorted(existing_names)!r}; expected {dataset_name!r}"
+            )
+        return dataset
+
+    return dataset.add_column(
+        DATASET_NAME_COLUMN,
+        [dataset_name] * len(dataset),
     )
-
-    return DatasetDict({
-        split_name: concatenate_datasets(split_datasets, info=info)
-        for split_name, split_datasets in splits.items()
-        if split_datasets
-    })
 
 
 def get_dataset_split(
@@ -266,6 +380,44 @@ def get_dataset_split(
     )
 
 
+def get_dataset_sources(
+    dataset: Dataset | DatasetDict,
+    split: str = "train",
+) -> dict[str, Dataset]:
+    """Return one map-style split per source dataset.
+
+    ``unified_dataset_loader`` stores source names in
+    :data:`DATASET_NAME_COLUMN`.  A standalone, named ``Dataset`` remains
+    supported as a one-source input for callers and tests that do not use the
+    unified loader.
+    """
+    source_split = get_dataset_split(dataset, split)
+
+    if DATASET_NAME_COLUMN not in source_split.column_names:
+        dataset_name = get_dataset_name(source_split)
+        if dataset_name is None:
+            raise ValueError(
+                "training data must provide a non-empty dataset name; "
+                f"add {DATASET_NAME_COLUMN!r} when combining unnamed sources"
+            )
+        return {dataset_name: source_split}
+
+    names = source_split[DATASET_NAME_COLUMN]
+    source_indices: dict[str, list[int]] = {}
+    for row_index, dataset_name in enumerate(names):
+        if not isinstance(dataset_name, str) or not dataset_name:
+            raise ValueError(
+                f"{DATASET_NAME_COLUMN!r} must contain non-empty strings; "
+                f"got {dataset_name!r} at row {row_index}"
+            )
+        source_indices.setdefault(dataset_name, []).append(row_index)
+
+    return {
+        dataset_name: source_split.select(indices)
+        for dataset_name, indices in source_indices.items()
+    }
+
+
 def get_all_dataset(
         dataset: Dataset | DatasetDict,
 ):
@@ -274,9 +426,25 @@ def get_all_dataset(
 
     if isinstance(dataset, DatasetDict):
         name = get_dataset_name(dataset)
-        size_in_bytes = get_dataset_size_bytes(dataset)
+        download_size = get_dataset_size_bytes(dataset)
+        dataset_size = _sum_known_sizes(
+            [
+                _materialized_dataset_size_bytes(split_dataset)
+                for split_dataset in dataset.values()
+            ]
+        )
+        size_in_bytes = (
+            download_size + dataset_size
+            if download_size is not None and dataset_size is not None
+            else None
+        )
         info = (
-            DatasetInfo(dataset_name=name, size_in_bytes=size_in_bytes)
+            DatasetInfo(
+                dataset_name=name,
+                download_size=download_size,
+                dataset_size=dataset_size,
+                size_in_bytes=size_in_bytes,
+            )
             if name is not None or size_in_bytes is not None
             else None
         )

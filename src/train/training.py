@@ -20,6 +20,7 @@ from datasets_mgr import (
     get_dataset_fingerprint,
     get_dataset_name,
     get_dataset_size_bytes,
+    get_dataset_sources,
 )
 from helpers.get_git_commit import get_git_snapshot
 from tokenizer import get_tokenizer_fingerprint
@@ -27,10 +28,12 @@ from tokenizer import get_tokenizer_fingerprint
 from .hyperparameters import (
     TrainingHyperparameters,
     TrainingSettings,
+    allocate_dataset_token_budgets,
     _validate_hyperparameters,
 )
 from .packing import (
     PackedTokenBatch,
+    iter_dataset_packed_batches,
     iter_packed_batches,
     pretokenize_split,
     special_token_id,
@@ -259,7 +262,12 @@ def pretrain_transformer(
     if "train" not in dataset:
         raise ValueError("dataset must contain a 'train' split")
 
-    settings = _validate_hyperparameters(hyperparameters, model_config)
+    raw_train_sources = get_dataset_sources(dataset, "train")
+    settings = _validate_hyperparameters(
+        hyperparameters,
+        model_config,
+        raw_train_sources.keys(),
+    )
     if settings.use_bf16 and (
         device.type != "cuda" or not torch.cuda.is_bf16_supported()
     ):
@@ -280,20 +288,31 @@ def pretrain_transformer(
             f"got {settings.warmup_steps} > {training_steps}"
         )
 
-    # Tokenize each split once before the first batch reaches the model.  The
-    # packed-batch iterators below only read token IDs, so repeated epochs and
-    # validation no longer redo CPU tokenization work.
-    train_split = pretokenize_split(
-        dataset["train"],
-        tokenizer,
-        tokenization_batch_size=settings.tokenization_batch_size,
+    initial_token_budgets = allocate_dataset_token_budgets(
+        settings.max_train_tokens,
+        settings.dataset_token_percentages,
     )
+
+    # Tokenize each allocated training prefix once before the first batch
+    # reaches the model. The packed-batch iterators below only read token IDs,
+    # so repeated epochs do not redo CPU tokenization work or scan unused
+    # suffixes of a source dataset.
+    train_splits = {
+        dataset_name: pretokenize_split(
+            source_split,
+            tokenizer,
+            tokenization_batch_size=settings.tokenization_batch_size,
+            max_tokens=initial_token_budgets[dataset_name],
+        )
+        for dataset_name, source_split in raw_train_sources.items()
+    }
     validation_source = dataset.get("validation")
     validation_split = (
         pretokenize_split(
             validation_source,
             tokenizer,
             tokenization_batch_size=settings.tokenization_batch_size,
+            max_tokens=settings.max_validation_tokens,
         )
         if validation_source is not None
         else None
@@ -309,6 +328,7 @@ def pretrain_transformer(
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=settings.learning_rate,
+        betas=settings.betas,
         weight_decay=settings.weight_decay,
     )
     scheduler = get_cosine_schedule_with_warmup(
@@ -327,6 +347,7 @@ def pretrain_transformer(
         save_path,
         model_name,
         manifest=manifest,
+        tokenizer=tokenizer,
         resume_from=resume_from,
         config_paths=config_paths,
     )
@@ -363,18 +384,22 @@ def pretrain_transformer(
         epoch_token_limit = state.epoch_tokens_seen + (
             settings.max_train_tokens - state.tokens_seen
         )
+        epoch_token_budgets = allocate_dataset_token_budgets(
+            epoch_token_limit,
+            settings.dataset_token_percentages,
+        )
         model.train()
 
-        for batch_index, cpu_batch in iter_packed_batches(
-            train_split,
+        for batch_index, cpu_batch in iter_dataset_packed_batches(
+            train_splits,
+            epoch_token_budgets,
             settings.sequence_length,
             settings.packing_stride,
             pad_token_id,
             batch_size=settings.batch_size,
+            start_batch_index=start_batch_index,
             seed=settings.seed + epoch,
             shuffle=settings.shuffle,
-            max_tokens=epoch_token_limit,
-            start_batch_index=start_batch_index,
         ):
             batch = _move_batch(cpu_batch, model_device)
             optimizer.zero_grad(set_to_none=True)

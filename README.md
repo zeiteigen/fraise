@@ -25,3 +25,26 @@ uv run train \
 
 If the files are not passed on the command line, enter their paths when
 prompted. Both source files are copied into the model run directory.
+The run directory also contains the exact tokenizer used for training as
+`tokenizer.json`, so inference does not depend on the local tokenizer cache.
+
+Training hyperparameters include a token-mixture map. The percentages must
+name every loaded training dataset and sum to `100`; integer token budgets are
+rounded so their total is exactly `max_train_tokens`.
+
+```json
+"dataset_token_percentages": {
+  "babylm": 25,
+  "fineweb-edu": 75
+}
+```
+
+When a dataset contributes less than its complete token stream, pretraining
+uses its tokens from the beginning of the dataset rather than selecting random
+examples.
+
+The `train` command also uses those budgets when it must train a new base
+tokenizer. It estimates 4 UTF-8 bytes per token to limit the text read from
+each source, then tokenizes the selected training prefixes to the exact token
+budgets. The byte estimate affects tokenizer training speed; training still
+uses the configured token counts.

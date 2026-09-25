@@ -6,8 +6,13 @@ from config import (
     load_model_config,
     load_training_hyperparameters,
 )
+from datasets_mgr import get_dataset_sources
 from tokenizer import load_tokenizer
 from train import pretrain_transformer
+from train.hyperparameters import (
+    _validate_hyperparameters,
+    allocate_dataset_token_budgets,
+)
 
 
 def _get_config_path(path: Path | None, prompt: str) -> Path:
@@ -73,11 +78,21 @@ def main(argv=None):
     )
     model_config = load_model_config(model_config_path)
     dataset = get_dataset_loader()
+    settings = _validate_hyperparameters(
+        training_hyperparameters,
+        model_config,
+        get_dataset_sources(dataset, "train").keys(),
+    )
+    token_budgets = allocate_dataset_token_budgets(
+        settings.max_train_tokens,
+        settings.dataset_token_percentages,
+    )
 
     # Load the tokenizer
     tokenizer = load_tokenizer(
         vocab_size=model_config["vocab_size"],
         dataset=dataset,
+        training_token_budgets=token_budgets,
     )
 
     model_config = dict(model_config)

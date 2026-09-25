@@ -10,6 +10,8 @@ from components.model import ModelConfig
 from datasets_mgr import unified_dataset_loader
 from datasets_mgr.babylm import use_babylm
 from datasets_mgr.finewebedu import use_fineweb_edu
+from datasets_mgr.cosmopedia_khan import use_cosmopedia_khan_academy
+from datasets_mgr.cosmopedia_stories import use_cosmopedia_stories
 
 
 JsonConfig: TypeAlias = dict[str, Any]
@@ -37,11 +39,34 @@ def _is_optional_integer(value: object) -> bool:
     return value is None or _is_integer(value)
 
 
+def _is_betas(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(_is_number(beta) for beta in value)
+    )
+
+
+def _is_dataset_token_percentages(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and bool(value)
+        and all(
+            isinstance(dataset_name, str)
+            and bool(dataset_name)
+            and _is_number(percentage)
+            for dataset_name, percentage in value.items()
+        )
+    )
+
+
 _TRAINING_HYPERPARAMETER_TYPES: dict[str, JsonTypeCheck] = {
     "num_epochs": _is_integer,
     "batch_size": _is_integer,
     "learning_rate": _is_number,
+    "betas": _is_betas,
     "weight_decay": _is_number,
+    "dataset_token_percentages": _is_dataset_token_percentages,
     "warmup_steps": _is_integer,
     "sequence_length": _is_integer,
     "max_train_tokens": _is_integer,
@@ -141,4 +166,4 @@ def load_model_config(path: ConfigPath) -> ModelConfig:
 
 def get_dataset_loader():
     """Construct the combined dataset only when a script starts doing work."""
-    return unified_dataset_loader([use_babylm(), use_fineweb_edu()])
+    return unified_dataset_loader([use_babylm(), use_fineweb_edu(), use_cosmopedia_khan_academy(), use_cosmopedia_stories()])

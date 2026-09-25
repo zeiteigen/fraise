@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -23,6 +23,7 @@ from datasets_mgr import (
     get_dataset_fingerprint,
     get_dataset_split,
     get_dataset_size_bytes,
+    get_dataset_sources,
 )
 
 
@@ -44,6 +45,8 @@ SPECIAL_TOKENS = [
 
 TOKENIZER_SCHEMA_VERSION = 2
 TOKENIZER_MIN_FREQUENCY = 2
+ESTIMATED_BYTES_PER_TOKEN = 4
+BYTES_PER_GB = 1_000_000_000
 
 
 def get_tokenizer_fingerprint(tokenizer: Tokenizer) -> str:
@@ -89,6 +92,7 @@ def _iter_text_batches(
     *,
     text_column: str = TEXT_COLUMN,
     batch_size: int = BATCH_SIZE,
+    max_bytes: int | None = None,
 ) -> Iterator[list[str]]:
     """
     Yield batches of strings without materializing the whole dataset.
@@ -98,24 +102,34 @@ def _iter_text_batches(
             f"Column {text_column!r} not found. "
             f"Available columns: {dataset.column_names}"
         )
+    if max_bytes == 0:
+        return
 
     # Avoid decoding unrelated columns from the Arrow dataset.
     text_dataset = dataset.select_columns(text_column)
 
+    bytes_seen = 0
     for batch in text_dataset.iter(batch_size=batch_size):
-        texts = [
-            text
-            for text in batch[text_column]
-            if isinstance(text, str) and text
-        ]
+        texts = []
+        for text in batch[text_column]:
+            if not isinstance(text, str) or not text:
+                continue
+            texts.append(text)
+            if max_bytes is not None:
+                bytes_seen += len(text.encode("utf-8"))
+                if bytes_seen >= max_bytes:
+                    break
 
         if texts:
             yield texts
+        if max_bytes is not None and bytes_seen >= max_bytes:
+            return
 
 
 def _train_tokenizer(
     dataset: Dataset | DatasetDict,
     vocab_size: int,
+    training_token_budgets: Mapping[str, int] | None = None,
 ) -> Tokenizer:
     """
     Train a byte-level BPE tokenizer for ``dataset``.
@@ -151,11 +165,27 @@ def _train_tokenizer(
         show_progress=True,
     )
 
-    tokenizer.train_from_iterator(
-        _iter_text_batches(train_dataset),
-        trainer=trainer,
-        length=len(train_dataset),
-    )
+    if training_token_budgets is None:
+        text_batches = _iter_text_batches(train_dataset)
+        length = len(train_dataset)
+    else:
+        sources = get_dataset_sources(dataset, "train")
+
+        def budgeted_batches() -> Iterator[list[str]]:
+            for name, source in sources.items():
+                byte_limit = training_token_budgets[name] * ESTIMATED_BYTES_PER_TOKEN
+                if byte_limit == 0:
+                    continue
+                print(
+                    f"Training tokenizer on up to {byte_limit / BYTES_PER_GB:.3f} "
+                    f"GB from {name}."
+                )
+                yield from _iter_text_batches(source, max_bytes=byte_limit)
+
+        text_batches = budgeted_batches()
+        length = None
+
+    tokenizer.train_from_iterator(text_batches, trainer=trainer, length=length)
 
     return _configure_tokenizer(tokenizer)
 
@@ -219,6 +249,7 @@ def _find_metadata_record(
     dataset_name: str | None,
     dataset_size_bytes: int | None = None,
     dataset_fingerprint: str | None = None,
+    training_token_budgets: Mapping[str, int] | None = None,
     *,
     dataset_was_supplied: bool,
 ) -> dict[str, object] | None:
@@ -241,6 +272,12 @@ def _find_metadata_record(
                 and record.get("dataset_size_bytes") == dataset_size_bytes
                 and record.get("dataset_fingerprint") == dataset_fingerprint
                 and record.get("training_split") == "train"
+                and record.get("training_token_budgets")
+                == (
+                    dict(training_token_budgets)
+                    if training_token_budgets is not None
+                    else None
+                )
             )
         ]
     else:
@@ -258,15 +295,16 @@ def _find_metadata_record(
 def load_tokenizer(
     vocab_size: int,
     dataset: Dataset | DatasetDict | None = None,
+    *,
+    training_token_budgets: Mapping[str, int] | None = None,
 ) -> Tokenizer:
     """
     Load or train a tokenizer for ``vocab_size`` and ``dataset``.
 
-    Existing canonical tokenizer files are selected by vocabulary size and
-    dataset name.  Metadata is retained as provenance and supports loading
-    older/custom paths.  When no dataset is supplied, a tokenizer can still
-    be loaded if exactly one metadata record has the requested vocabulary
-    size.
+    A cached tokenizer is reusable only when metadata matches the supplied
+    training dataset.  Metadata also supports loading older/custom paths.
+    When no dataset is supplied, a tokenizer can still be loaded if exactly
+    one metadata record has the requested vocabulary size.
 
     If no matching tokenizer exists, ``dataset`` is required so a new one
     can be trained.  Metadata for every trained tokenizer is kept in
@@ -276,24 +314,22 @@ def load_tokenizer(
         raise TypeError("vocab_size must be an integer")
     if vocab_size <= 0:
         raise ValueError("vocab_size must be greater than zero")
+    if training_token_budgets is not None:
+        if dataset is None:
+            raise ValueError("a dataset is required with training_token_budgets")
+        source_names = set(get_dataset_sources(dataset, "train"))
+        if set(training_token_budgets) != source_names or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in training_token_budgets.values()
+        ):
+            raise ValueError(
+                "training_token_budgets must give a non-negative integer "
+                "for every training dataset"
+            )
 
     dataset_name = (
         get_dataset_name(dataset) if dataset is not None else None
     )
-
-    # The filename is the stable cache key used by this project.  Metadata
-    # contains provenance, but it must not turn a reusable tokenizer into a
-    # cache miss when a dataset loader produces a different fingerprint for
-    # the same persisted data.  A changed tokenizer should be requested by
-    # removing this artifact (or by choosing a new vocabulary size).
-    tokenizer_path = _tokenizer_path(vocab_size, dataset_name)
-    if tokenizer_path.exists():
-        return _configure_tokenizer(Tokenizer.from_file(str(tokenizer_path)))
-    else:
-        print(
-            f"No tokenizer found at {tokenizer_path}. "
-            "A new one will be trained and persisted."
-        )
 
     training_dataset = (
         get_dataset_split(dataset, "train") if dataset is not None else None
@@ -315,17 +351,27 @@ def load_tokenizer(
         dataset_name,
         dataset_size_bytes,
         dataset_fingerprint,
+        training_token_budgets,
         dataset_was_supplied=dataset is not None,
     )
 
+    tokenizer_path = _tokenizer_path(vocab_size, dataset_name)
     if metadata_record is not None:
-        tokenizer_path = _record_path(
+        recorded_path = _record_path(
             metadata_record,
             vocab_size,
             dataset_name,
         )
-        if tokenizer_path.exists():
-            return _configure_tokenizer(Tokenizer.from_file(str(tokenizer_path)))
+        if recorded_path.exists():
+            expected_sha256 = metadata_record.get("tokenizer_sha256")
+            checksum_matches = (
+                not isinstance(expected_sha256, str)
+                or _sha256_file(recorded_path) == expected_sha256
+            )
+            if checksum_matches:
+                return _configure_tokenizer(
+                    Tokenizer.from_file(str(recorded_path))
+                )
 
     if dataset is None:
         raise FileNotFoundError(
@@ -334,7 +380,18 @@ def load_tokenizer(
             "a dataset is required to train one."
         )
 
-    tokenizer = _train_tokenizer(dataset, vocab_size)
+    if tokenizer_path.exists():
+        print(
+            f"No matching tokenizer metadata found for {tokenizer_path}. "
+            "A new tokenizer will be trained and persisted."
+        )
+    else:
+        print(
+            f"No tokenizer found at {tokenizer_path}. "
+            "A new one will be trained and persisted."
+        )
+
+    tokenizer = _train_tokenizer(dataset, vocab_size, training_token_budgets)
 
     TOKENIZER_DIR.mkdir(parents=True, exist_ok=True)
     tokenizer_path = _tokenizer_path(vocab_size, dataset_name)
@@ -350,6 +407,9 @@ def load_tokenizer(
         "dataset_size_bytes": dataset_size_bytes,
         "dataset_fingerprint": dataset_fingerprint,
         "training_split": "train",
+        "training_token_budgets": (
+            dict(training_token_budgets) if training_token_budgets is not None else None
+        ),
         "min_frequency": TOKENIZER_MIN_FREQUENCY,
         "special_tokens": SPECIAL_TOKENS,
         "post_processor": "bos_eos",
@@ -358,8 +418,34 @@ def load_tokenizer(
 
     new_record["tokenizer_sha256"] = _sha256_file(tokenizer_path)
 
+    # The canonical filename is stable for (vocabulary size, dataset name).
+    # If that file is being replaced after a dataset change, discard stale
+    # records that point to it so they cannot claim the new bytes belong to
+    # the old dataset fingerprint.  Also replace an exact record whose file
+    # disappeared or failed its checksum.
+    replace_indices = set()
     if metadata_record is not None:
-        metadata[metadata.index(metadata_record)] = new_record
+        replace_indices.add(metadata.index(metadata_record))
+
+    canonical_path = tokenizer_path.resolve()
+    for index, record in enumerate(metadata):
+        if (
+            record.get("vocab_size") == vocab_size
+            and record.get("dataset") == dataset_name
+            and record.get("training_split") == "train"
+            and _record_path(record, vocab_size, dataset_name).resolve()
+            == canonical_path
+        ):
+            replace_indices.add(index)
+
+    if replace_indices:
+        insert_at = min(replace_indices)
+        metadata = [
+            record
+            for index, record in enumerate(metadata)
+            if index not in replace_indices
+        ]
+        metadata.insert(insert_at, new_record)
     else:
         metadata.append(new_record)
     _write_metadata(metadata)

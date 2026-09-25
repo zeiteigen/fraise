@@ -1,56 +1,49 @@
-from datasets import load_dataset
-import json
+"""FineWeb-Edu dataset source."""
+
 from pathlib import Path
 
+from .hf_dataset import HFDataset
 
-DATA_DIR = "data/raw/fineweb-edu"
+
+DATA_DIR = Path("data/raw/fineweb-edu")
 DATASET_NAME = "fineweb-edu"
-TRAIN_DATA_FILE = "fineweb_edu_train.jsonl"
-VALIDATION_DATA_FILE = "fineweb_edu_validation.jsonl"
-TRAIN_DATA_FILE_PATH = Path(DATA_DIR) / TRAIN_DATA_FILE
-VALIDATION_DATA_FILE_PATH = Path(DATA_DIR) / VALIDATION_DATA_FILE
-TRAIN_BYTES = 1_000_000_000  # start with ~1 GB raw text
-VALIDATION_BYTES = 10_000_000  # start with ~10 MB raw text
+REPO_ID = "HuggingFaceFW/fineweb-edu"
+CONFIG = "sample-10BT"
 
-def use_fineweb_edu():
-    if not Path(DATA_DIR).exists():
-        Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-    if not TRAIN_DATA_FILE_PATH.exists() or not VALIDATION_DATA_FILE_PATH.exists():
-        ds = load_dataset(
-            "HuggingFaceFW/fineweb-edu",
-            "sample-10BT",
-            split="train",
-            streaming=True,
-        )
+# Preserve the previous default: a manageable training slice plus a small
+# validation slice. Pass size_gb=None to consume the complete source.
+TRAIN_BYTES = 2_500_000_000
+VALIDATION_BYTES = 50_000_000
+DEFAULT_SIZE_GB = (TRAIN_BYTES + VALIDATION_BYTES) / 1_000_000_000
+DEFAULT_VALIDATION_SIZE_GB = VALIDATION_BYTES / 1_000_000_000
 
-        written = 0
 
-        with open(VALIDATION_DATA_FILE_PATH, "w") as validation_file, open(
-            TRAIN_DATA_FILE_PATH, "w"
-        ) as train_file:
-            for row in ds:
-                text = row["text"]
-                record = json.dumps({"text": text}) + "\n"
-
-                if written < VALIDATION_BYTES:
-                    validation_file.write(record)
-                else:
-                    train_file.write(record)
-
-                written += len(text.encode("utf-8"))
-
-                if written >= TRAIN_BYTES + VALIDATION_BYTES:
-                    break
-
-        print(f"Saved {written / 1e9:.2f} GB")
-    dataset = load_dataset(
-        "json",
-        data_files={
-            "train": str(TRAIN_DATA_FILE_PATH),
-            "validation": str(VALIDATION_DATA_FILE_PATH),
-        },
+def use_fineweb_edu(
+    size_gb: float | None = DEFAULT_SIZE_GB,
+    *,
+    validation_size_gb: float = DEFAULT_VALIDATION_SIZE_GB,
+    data_dir: str | Path = DATA_DIR,
+    force_download: bool = False,
+):
+    """Return FineWeb-Edu, optionally bounded to ``size_gb`` decimal GB."""
+    return HFDataset(
+        repo_id=REPO_ID,
+        config=CONFIG,
+        data_dir=data_dir,
+        dataset_name=DATASET_NAME,
+        cache_prefix="fineweb_edu",
+    ).load(
+        size_gb=size_gb,
+        validation_size_gb=validation_size_gb,
+        force_download=force_download,
     )
-    for split_dataset in dataset.values():
-        split_dataset.info.dataset_name = DATASET_NAME
-    return dataset
-        
+
+
+__all__ = [
+    "CONFIG",
+    "DATASET_NAME",
+    "DEFAULT_SIZE_GB",
+    "DEFAULT_VALIDATION_SIZE_GB",
+    "REPO_ID",
+    "use_fineweb_edu",
+]

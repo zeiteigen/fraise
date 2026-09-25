@@ -1,7 +1,8 @@
 """Training hyperparameter definitions and validation."""
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_FLOOR
 import math
 from numbers import Integral, Real
 from typing import Any, TypedDict
@@ -12,7 +13,9 @@ class TrainingHyperparameters(TypedDict):
 
     batch_size: int
     learning_rate: float
+    betas: list[float]
     weight_decay: float
+    dataset_token_percentages: dict[str, float]
     num_epochs: int
     warmup_steps: int
     sequence_length: int
@@ -31,6 +34,7 @@ class TrainingHyperparameters(TypedDict):
 class TrainingSettings:
     batch_size: int
     learning_rate: float
+    betas: tuple[float, float]
     weight_decay: float
     num_epochs: int
     warmup_steps: int
@@ -44,6 +48,7 @@ class TrainingSettings:
     use_bf16: bool
     shuffle: bool
     gradient_clip_norm: float
+    dataset_token_percentages: dict[str, float] = field(default_factory=dict)
 
 
 def _positive_int(name: str, value: Any) -> int:
@@ -52,9 +57,136 @@ def _positive_int(name: str, value: Any) -> int:
     return int(value)
 
 
+def _normalize_dataset_token_percentages(
+    value: object,
+    dataset_names: Collection[str] | None,
+) -> dict[str, float]:
+    """Validate and normalize the source-token percentage configuration."""
+    if value is None:
+        if dataset_names is None:
+            return {}
+        names = sorted(set(dataset_names))
+        if not names:
+            raise ValueError("at least one dataset is required for training")
+        equal_share = 100.0 / len(names)
+        percentages = {name: equal_share for name in names}
+    else:
+        if not isinstance(value, Mapping) or not value:
+            raise ValueError(
+                "dataset_token_percentages must be a non-empty mapping of "
+                "dataset names to percentages; "
+                f"got {value!r}"
+            )
+
+        percentages = {}
+        for dataset_name, percentage in value.items():
+            if not isinstance(dataset_name, str) or not dataset_name:
+                raise ValueError(
+                    "dataset_token_percentages keys must be non-empty strings; "
+                    f"got {dataset_name!r}"
+                )
+            if (
+                isinstance(percentage, bool)
+                or not isinstance(percentage, Real)
+                or not math.isfinite(float(percentage))
+                or percentage < 0
+                or percentage > 100
+            ):
+                raise ValueError(
+                    "dataset_token_percentages values must be finite numbers "
+                    "in [0, 100]; "
+                    f"{dataset_name!r} got {percentage!r}"
+                )
+            percentages[dataset_name] = float(percentage)
+
+        if dataset_names is not None:
+            available_names = set(dataset_names)
+            configured_names = set(percentages)
+            unknown_names = sorted(configured_names - available_names)
+            missing_names = sorted(available_names - configured_names)
+            if unknown_names:
+                raise ValueError(
+                    "dataset_token_percentages contains unknown dataset name(s): "
+                    f"{', '.join(unknown_names)}. Available datasets: "
+                    f"{', '.join(sorted(available_names))}"
+                )
+            if missing_names:
+                raise ValueError(
+                    "dataset_token_percentages is missing dataset name(s): "
+                    f"{', '.join(missing_names)}"
+                )
+
+    total_percentage = math.fsum(percentages.values())
+    if not math.isclose(total_percentage, 100.0, rel_tol=0.0, abs_tol=1e-6):
+        raise ValueError(
+            "dataset_token_percentages must sum to 100; "
+            f"got {total_percentage:g}"
+        )
+
+    # A tiny JSON floating-point rounding error should not turn into a token
+    # allocation error. Normalize once, then retain deterministic key order.
+    if total_percentage != 100.0:
+        scale = 100.0 / total_percentage
+        percentages = {
+            name: percentage * scale
+            for name, percentage in percentages.items()
+        }
+
+    if dataset_names is not None:
+        return {
+            name: percentages[name]
+            for name in sorted(set(dataset_names))
+        }
+    return percentages
+
+
+def allocate_dataset_token_budgets(
+    total_tokens: int,
+    dataset_token_percentages: Mapping[str, float],
+) -> dict[str, int]:
+    """Allocate an exact integer token budget using largest remainders.
+
+    Percentages usually do not map to whole tokens.  Flooring each share and
+    assigning the remaining tokens to the largest fractional remainders keeps
+    the sum exactly equal to ``total_tokens`` while minimizing rounding error.
+    """
+    if isinstance(total_tokens, bool) or not isinstance(total_tokens, Integral):
+        raise ValueError(f"total_tokens must be an integer; got {total_tokens!r}")
+    if total_tokens < 0:
+        raise ValueError(f"total_tokens must be non-negative; got {total_tokens!r}")
+    if not dataset_token_percentages:
+        raise ValueError("at least one dataset token percentage is required")
+
+    normalized = _normalize_dataset_token_percentages(
+        dataset_token_percentages,
+        dataset_names=None,
+    )
+    order = {dataset_name: index for index, dataset_name in enumerate(normalized)}
+    raw_budgets = {
+        name: Decimal(total_tokens) * Decimal(str(percentage)) / Decimal(100)
+        for name, percentage in normalized.items()
+    }
+    budgets = {
+        name: int(raw_budget.to_integral_value(rounding=ROUND_FLOOR))
+        for name, raw_budget in raw_budgets.items()
+    }
+    remaining = int(total_tokens) - sum(budgets.values())
+    remainders = sorted(
+        normalized,
+        key=lambda name: (
+            -(raw_budgets[name] - budgets[name]),
+            order[name],
+        ),
+    )
+    for dataset_name in remainders[:remaining]:
+        budgets[dataset_name] += 1
+    return budgets
+
+
 def _validate_hyperparameters(
     hyperparameters: Mapping[str, Any],
     model_config: Mapping[str, Any],
+    dataset_names: Collection[str] | None = None,
 ) -> TrainingSettings:
     """Validate and normalize all settings that affect training state."""
     batch_size = _positive_int("batch_size", hyperparameters.get("batch_size"))
@@ -112,6 +244,30 @@ def _validate_hyperparameters(
             f"learning_rate must be a finite positive number; got {learning_rate!r}"
         )
 
+    betas = hyperparameters.get("betas", (0.9, 0.999))
+    if (
+        isinstance(betas, (str, bytes))
+        or not isinstance(betas, Sequence)
+        or len(betas) != 2
+    ):
+        raise ValueError(
+            "betas must be a sequence containing exactly two numbers; "
+            f"got {betas!r}"
+        )
+    normalized_betas: list[float] = []
+    for index, beta in enumerate(betas):
+        if (
+            isinstance(beta, bool)
+            or not isinstance(beta, Real)
+            or not math.isfinite(float(beta))
+            or beta < 0
+            or beta >= 1
+        ):
+            raise ValueError(
+                f"betas[{index}] must be a finite number in [0, 1); got {beta!r}"
+            )
+        normalized_betas.append(float(beta))
+
     weight_decay = hyperparameters.get("weight_decay", 0.0)
     if (
         isinstance(weight_decay, bool)
@@ -122,6 +278,11 @@ def _validate_hyperparameters(
         raise ValueError(
             f"weight_decay must be a finite non-negative number; got {weight_decay!r}"
         )
+
+    dataset_token_percentages = _normalize_dataset_token_percentages(
+        hyperparameters.get("dataset_token_percentages"),
+        dataset_names,
+    )
 
     seed = hyperparameters.get("seed", 1337)
     if isinstance(seed, bool) or not isinstance(seed, Integral) or seed < 0:
@@ -170,7 +331,9 @@ def _validate_hyperparameters(
     return TrainingSettings(
         batch_size=batch_size,
         learning_rate=float(learning_rate),
+        betas=(normalized_betas[0], normalized_betas[1]),
         weight_decay=float(weight_decay),
+        dataset_token_percentages=dataset_token_percentages,
         num_epochs=num_epochs,
         warmup_steps=int(warmup_steps),
         sequence_length=sequence_length,
