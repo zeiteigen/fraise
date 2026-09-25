@@ -33,6 +33,7 @@ class FraiseModel(nn.Module):
         num_layers = config["num_layers"]
         max_seq_len = config.get("max_seq_len", 2048)
 
+        self.max_seq_len = max_seq_len
         self.token_embedding = TokenEmbedding(vocab_size, residual_stream_dim)
         self.transformer = Transformer(
             residual_stream_dim,
@@ -41,11 +42,16 @@ class FraiseModel(nn.Module):
             num_heads,
             swiglu_up_dim,
             num_layers,
-            max_seq_len,
         )
         self.lm_head = LMHead(residual_stream_dim, vocab_size)
 
-    def forward(self, input_ids, padding_mask=None):
+    def forward(self, input_ids):
+        if input_ids.size(1) > self.max_seq_len:
+            raise ValueError(
+                f"sequence length {input_ids.size(1)} exceeds "
+                f"max_seq_len {self.max_seq_len}"
+            )
+
         hidden_states = self.token_embedding(input_ids)
-        hidden_states = self.transformer(hidden_states, padding_mask)
+        hidden_states = self.transformer(hidden_states)
         return self.lm_head(hidden_states)

@@ -17,7 +17,7 @@ dependencies = [
 
 [project.scripts]
 create-tokenizer = "scripts.create_tokenizer:main"
-train = "scripts.train.main"
+train = "scripts.train:main"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]

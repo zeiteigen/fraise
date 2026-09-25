@@ -8,7 +8,6 @@ from config import (
 )
 from tokenizer import load_tokenizer
 from train import pretrain_transformer
-from components.model import FraiseModel
 
 
 def _get_config_path(path: Path | None, prompt: str) -> Path:
@@ -81,7 +80,6 @@ def main(argv=None):
 
     # Pretrain the transformer model
     pretrain_transformer(
-        transformer_model_class=FraiseModel,
         tokenizer=tokenizer,
         dataset=dataset,
         hyperparameters=training_hyperparameters,

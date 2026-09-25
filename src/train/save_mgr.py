@@ -18,7 +18,7 @@ ConfigPath = str | Path
 
 
 def capture_rng_state() -> dict[str, object]:
-    """Capture RNG state needed to continue a run reproducibly."""
+    """Capture RNG state stored with each training checkpoint."""
     state: dict[str, object] = {
         "python": random.getstate(),
         "torch": torch.get_rng_state(),
@@ -208,30 +208,19 @@ class SaveManager:
         model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-        scaler: torch.amp.GradScaler | None = None,
         *,
-        epoch: int,
-        next_batch_index: int,
-        global_step: int,
-        tokens_seen: int,
-        epoch_tokens_seen: int,
-        extra_state: dict[str, object] | None = None,
+        training_state: Mapping[str, object],
     ) -> Path:
         """Atomically save a checkpoint after a completed optimizer step."""
+        training_state = dict(training_state)
+        global_step = int(training_state["global_step"])
+        tokens_seen = int(training_state["tokens_seen"])
+        epoch = int(training_state["epoch"])
+
         checkpoint_path = self.save_dir / f"checkpoint_step_{global_step:08d}.pt"
         temporary_path = checkpoint_path.with_name(
             f".{checkpoint_path.name}.tmp"
         )
-
-        training_state = {
-            "epoch": epoch,
-            "next_batch_index": next_batch_index,
-            "global_step": global_step,
-            "tokens_seen": tokens_seen,
-            "epoch_tokens_seen": epoch_tokens_seen,
-        }
-        if extra_state:
-            training_state.update(extra_state)
 
         checkpoint = {
             "schema_version": CHECKPOINT_SCHEMA_VERSION,
@@ -240,10 +229,9 @@ class SaveManager:
             "scheduler_state_dict": (
                 scheduler.state_dict() if scheduler is not None else None
             ),
-            "scaler_state_dict": (
-                scaler.state_dict() if scaler is not None else None
-            ),
             "training_state": training_state,
+            # TrainingState contains counters; RNG state completes the resume
+            # information needed when the model has stochastic layers.
             "rng_state": capture_rng_state(),
         }
         torch.save(checkpoint, temporary_path)
@@ -272,9 +260,8 @@ class SaveManager:
         model: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-        scaler: torch.amp.GradScaler | None = None,
     ) -> dict[str, object]:
-        """Load model/training/RNG state and return the saved payload."""
+        """Load model, training, and RNG state from the selected checkpoint."""
         if self.latest_checkpoint is None:
             raise RuntimeError("no checkpoint has been selected for resuming")
 
@@ -293,8 +280,6 @@ class SaveManager:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        if scaler is not None and checkpoint.get("scaler_state_dict") is not None:
-            scaler.load_state_dict(checkpoint["scaler_state_dict"])
         restore_rng_state(checkpoint.get("rng_state"))
         return checkpoint
 
