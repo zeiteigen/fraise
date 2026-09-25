@@ -1,10 +1,11 @@
 """Crash-resilient checkpoint and run-manifest management."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import json
 import os
 from pathlib import Path
 import random
+import shutil
 import time
 
 from helpers.get_git_commit import get_git_commit
@@ -13,6 +14,7 @@ import torch
 
 META_FILE_NAME = "model_meta.json"
 CHECKPOINT_SCHEMA_VERSION = 2
+ConfigPath = str | Path
 
 
 def capture_rng_state() -> dict[str, object]:
@@ -75,6 +77,7 @@ class SaveManager:
         *,
         manifest: dict[str, object] | None = None,
         resume_from: str | Path | None = None,
+        config_paths: Iterable[ConfigPath] | ConfigPath | None = None,
     ):
         self.model_name = model_name
         self.messages: list[str] = []
@@ -118,7 +121,40 @@ class SaveManager:
             "manifest": manifest or {},
             "all_messages": self.messages,
         }
+        self._copy_config_files(config_paths)
         self._write_metadata()
+
+    def _copy_config_files(
+        self,
+        config_paths: Iterable[ConfigPath] | ConfigPath | None,
+    ) -> None:
+        """Archive the exact JSON inputs used to create a fresh run."""
+        if config_paths is None:
+            return
+
+        if isinstance(config_paths, (str, Path)):
+            config_paths = (config_paths,)
+
+        source_paths = [Path(config_path).expanduser() for config_path in config_paths]
+        copied_names: list[str] = []
+        for source_path in source_paths:
+            if not source_path.is_file():
+                raise FileNotFoundError(
+                    f"configuration file does not exist: {source_path}"
+                )
+
+            destination_path = self.save_dir / source_path.name
+            if destination_path.name in copied_names:
+                raise ValueError(
+                    "configuration files must have distinct filenames; "
+                    f"both resolve to {destination_path.name!r}"
+                )
+            if source_path.resolve() != destination_path.resolve():
+                shutil.copy2(source_path, destination_path)
+            copied_names.append(destination_path.name)
+
+        if copied_names:
+            self.metadata["config_files"] = copied_names
 
     def _read_metadata(self) -> dict[str, object]:
         with self.metadata_path.open(encoding="utf-8") as metadata_file:

@@ -9,3 +9,19 @@ During generation, the smaller output vocabulary is bridged back into the macro 
 The central question is:
 
 > **Can aggressive lexical compression reduce global transformer compute while preserving access to fine-grained structure when needed?**
+
+## Training configuration
+
+Training reads two type-checked JSON files: one for training hyperparameters and
+one for the model configuration. Running `train` without the corresponding
+options prompts for both paths. Example files matching the previous defaults
+are available in `configs/`.
+
+```sh
+uv run train \
+  --training-hyperparameters configs/training_hyperparameters.json \
+  --model-config configs/model_config.json
+```
+
+If the files are not passed on the command line, enter their paths when
+prompted. Both source files are copied into the model run directory.

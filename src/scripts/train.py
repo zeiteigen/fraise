@@ -1,14 +1,43 @@
 import argparse
 from pathlib import Path
 
-from config import DATASET_LOADER, TRAINING_HYPERPARAMETERS, MODEL_CONFIG
+from config import (
+    get_dataset_loader,
+    load_model_config,
+    load_training_hyperparameters,
+)
 from tokenizer import load_tokenizer
 from train import pretrain_transformer
-from components import FraiseModel
+from components.model import FraiseModel
+
+
+def _get_config_path(path: Path | None, prompt: str) -> Path:
+    if path is not None:
+        return path.expanduser()
+
+    entered_path = input(prompt).strip()
+    if not entered_path:
+        raise ValueError("a JSON configuration path is required")
+    return Path(entered_path).expanduser()
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Train the Fraise language model")
+    parser.add_argument(
+        "--training-hyperparameters",
+        "--hyperparameters",
+        dest="training_hyperparameters",
+        type=Path,
+        default=None,
+        help="JSON file containing training hyperparameters",
+    )
+    parser.add_argument(
+        "--model-config",
+        dest="model_config",
+        type=Path,
+        default=None,
+        help="JSON file containing model configuration",
+    )
     parser.add_argument(
         "--resume",
         type=Path,
@@ -27,23 +56,38 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
+    training_hyperparameters_path = _get_config_path(
+        args.training_hyperparameters,
+        "Path to training hyperparameters JSON: ",
+    )
+    model_config_path = _get_config_path(
+        args.model_config,
+        "Path to model configuration JSON: ",
+    )
+    training_hyperparameters = load_training_hyperparameters(
+        training_hyperparameters_path
+    )
+    model_config = load_model_config(model_config_path)
+    dataset = get_dataset_loader()
+
     # Load the tokenizer
     tokenizer = load_tokenizer(
-        vocab_size=MODEL_CONFIG["vocab_size"],
-        dataset=DATASET_LOADER,
+        vocab_size=model_config["vocab_size"],
+        dataset=dataset,
     )
 
-    model_config = dict(MODEL_CONFIG)
+    model_config = dict(model_config)
     model_config["vocab_size"] = tokenizer.get_vocab_size()
 
     # Pretrain the transformer model
     pretrain_transformer(
         transformer_model_class=FraiseModel,
         tokenizer=tokenizer,
-        dataset=DATASET_LOADER,
-        hyperparameters=TRAINING_HYPERPARAMETERS,
+        dataset=dataset,
+        hyperparameters=training_hyperparameters,
         model_config=model_config,
         save_path=args.save_path,
         model_name=args.model_name,
         resume_from=str(args.resume) if args.resume is not None else None,
+        config_paths=(training_hyperparameters_path, model_config_path),
     )

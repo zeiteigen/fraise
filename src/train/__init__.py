@@ -1,10 +1,11 @@
 """Packed, reproducible, mixed-precision training utilities for Fraise."""
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 import math
 from numbers import Integral, Real
+from pathlib import Path
 import platform
 import random
 from typing import Any, TypedDict
@@ -732,6 +733,7 @@ def pretrain_transformer(
     save_path: str,
     model_name: str = "fraise_model",
     resume_from: str | None = None,
+    config_paths: Iterable[str | Path] | str | Path | None = None,
 ) -> nn.Module:
     """Train a packed causal language model with resumable checkpoints.
 
@@ -791,6 +793,7 @@ def pretrain_transformer(
         model_name,
         manifest=manifest,
         resume_from=resume_from,
+        config_paths=config_paths,
     )
 
     state: dict[str, object] = {
