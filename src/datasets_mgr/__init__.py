@@ -1,6 +1,8 @@
-"""Utilities for composing the datasets used by Fraise."""
+"""Utilities for composing and fingerprinting the datasets used by Fraise."""
 
 from collections.abc import Sequence
+import hashlib
+import json
 from typing import TypeAlias
 
 from datasets import (
@@ -15,7 +17,7 @@ from datasets import (
 DatasetSource: TypeAlias = Dataset | IterableDataset
 
 
-allowed_splits: set[str] = {"train", "validation", "test"}
+allowed_splits: tuple[str, ...] = ("train", "validation", "test")
 
 
 def _dataset_names(dataset: DatasetSource | DatasetDict) -> set[str]:
@@ -93,6 +95,72 @@ def get_dataset_size_bytes(dataset: DatasetSource | DatasetDict) -> int | None:
         return sizes[0]
 
     return sum(sizes)
+
+
+def _dataset_fingerprint_payload(dataset: DatasetSource) -> dict[str, object]:
+    """Return a stable, compact descriptor for one map-style dataset.
+
+    Hugging Face datasets expose a content-derived fingerprint for datasets
+    loaded from local files and for most dataset transformations.  Keeping the
+    descriptor compact matters here: hashing every text byte at every launch
+    would add a needless full-dataset pass before training starts.
+    """
+    try:
+        num_rows = len(dataset)
+    except TypeError:
+        num_rows = None
+
+    info = getattr(dataset, "info", None)
+    return {
+        "dataset_name": getattr(info, "dataset_name", None),
+        "fingerprint": getattr(dataset, "_fingerprint", None),
+        "num_rows": num_rows,
+        "column_names": list(getattr(dataset, "column_names", ())),
+        "features": str(getattr(dataset, "features", None)),
+        "size_in_bytes": getattr(info, "size_in_bytes", None),
+        "dataset_size": getattr(info, "dataset_size", None),
+    }
+
+
+def get_dataset_fingerprint(
+    dataset: DatasetSource | DatasetDict,
+    *,
+    split: str | None = None,
+) -> str:
+    """Return a stable SHA-256 fingerprint for a dataset or split.
+
+    The digest includes Hugging Face's dataset fingerprint, schema, row count,
+    and dataset metadata.  It is intended to detect a changed dataset/cache
+    during resume and experiment comparison; it is not a replacement for a
+    separately archived raw-file checksum manifest.
+    """
+    if split is not None:
+        dataset = get_dataset_split(dataset, split)
+
+    if not isinstance(dataset, (Dataset, IterableDataset, DatasetDict)):
+        raise TypeError(
+            "Expected datasets.Dataset, datasets.IterableDataset, or "
+            "datasets.DatasetDict, "
+            f"got {type(dataset).__name__}"
+        )
+
+    if isinstance(dataset, DatasetDict):
+        payload: object = {
+            "splits": {
+                split_name: _dataset_fingerprint_payload(split_dataset)
+                for split_name, split_dataset in sorted(dataset.items())
+            }
+        }
+    else:
+        payload = _dataset_fingerprint_payload(dataset)
+
+    serialized = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
 
 
 def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> DatasetDict:

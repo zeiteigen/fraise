@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -10,6 +11,7 @@ from tokenizers import Tokenizer
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 from tokenizers.models import BPE
 from tokenizers.pre_tokenizers import ByteLevel
+from tokenizers.processors import TemplateProcessing
 from tokenizers.trainers import BpeTrainer
 
 
@@ -17,8 +19,9 @@ from helpers.get_git_commit import get_git_commit
 
 
 from datasets_mgr import (
-    get_all_dataset,
     get_dataset_name,
+    get_dataset_fingerprint,
+    get_dataset_split,
     get_dataset_size_bytes,
 )
 
@@ -34,6 +37,46 @@ SPECIAL_TOKENS = [
     "<|bos|>",
     "<|eos|>",
 ]
+
+TOKENIZER_SCHEMA_VERSION = 2
+TOKENIZER_MIN_FREQUENCY = 2
+
+
+def get_tokenizer_fingerprint(tokenizer: Tokenizer) -> str:
+    """Hash the complete serialized tokenizer, including post-processing."""
+    return hashlib.sha256(tokenizer.to_str().encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as tokenizer_file:
+        for chunk in iter(lambda: tokenizer_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _configure_tokenizer(tokenizer: Tokenizer) -> Tokenizer:
+    """Install the explicit document boundary behavior used by training."""
+    missing_tokens = [
+        token for token in SPECIAL_TOKENS if tokenizer.token_to_id(token) is None
+    ]
+    if missing_tokens:
+        tokenizer.add_special_tokens(missing_tokens)
+
+    bos_id = tokenizer.token_to_id("<|bos|>")
+    eos_id = tokenizer.token_to_id("<|eos|>")
+    if bos_id is None or eos_id is None:
+        raise ValueError("tokenizer must contain both BOS and EOS tokens")
+
+    tokenizer.post_processor = TemplateProcessing(
+        single="<|bos|> $A <|eos|>",
+        pair="<|bos|> $A <|eos|> <|bos|> $B <|eos|>",
+        special_tokens=[
+            ("<|bos|>", bos_id),
+            ("<|eos|>", eos_id),
+        ],
+    )
+    return tokenizer
 
 
 
@@ -76,7 +119,7 @@ def _train_tokenizer(
     The tokenizer vocabulary size is supplied by the caller so that the
     same dataset can have multiple persisted tokenizer variants.
     """
-    train_dataset = get_all_dataset(dataset)
+    train_dataset = get_dataset_split(dataset, "train")
 
     tokenizer = Tokenizer(BPE())
 
@@ -94,7 +137,7 @@ def _train_tokenizer(
 
     trainer = BpeTrainer(
         vocab_size=vocab_size,
-        min_frequency=2,
+        min_frequency=TOKENIZER_MIN_FREQUENCY,
         special_tokens=SPECIAL_TOKENS,
 
         # Ensure all 256 byte values are representable, eliminating
@@ -110,7 +153,7 @@ def _train_tokenizer(
         length=len(train_dataset),
     )
 
-    return tokenizer
+    return _configure_tokenizer(tokenizer)
 
 
 
@@ -171,6 +214,7 @@ def _find_metadata_record(
     vocab_size: int,
     dataset_name: str | None,
     dataset_size_bytes: int | None = None,
+    dataset_fingerprint: str | None = None,
     *,
     dataset_was_supplied: bool,
 ) -> dict[str, object] | None:
@@ -178,7 +222,10 @@ def _find_metadata_record(
     vocab_matches = [
         record
         for record in metadata
-        if record.get("vocab_size") == vocab_size
+        if (
+            record.get("vocab_size") == vocab_size
+            and record.get("schema_version") == TOKENIZER_SCHEMA_VERSION
+        )
     ]
 
     if dataset_was_supplied:
@@ -188,6 +235,8 @@ def _find_metadata_record(
             if (
                 record.get("dataset") == dataset_name
                 and record.get("dataset_size_bytes") == dataset_size_bytes
+                and record.get("dataset_fingerprint") == dataset_fingerprint
+                and record.get("training_split") == "train"
             )
         ]
     else:
@@ -226,8 +275,18 @@ def load_tokenizer(
     dataset_name = (
         get_dataset_name(dataset) if dataset is not None else None
     )
+    training_dataset = (
+        get_dataset_split(dataset, "train") if dataset is not None else None
+    )
     dataset_size_bytes = (
-        get_dataset_size_bytes(dataset) if dataset is not None else None
+        get_dataset_size_bytes(training_dataset)
+        if training_dataset is not None
+        else None
+    )
+    dataset_fingerprint = (
+        get_dataset_fingerprint(training_dataset)
+        if training_dataset is not None
+        else None
     )
     metadata = _read_metadata()
     metadata_record = _find_metadata_record(
@@ -235,6 +294,7 @@ def load_tokenizer(
         vocab_size,
         dataset_name,
         dataset_size_bytes,
+        dataset_fingerprint,
         dataset_was_supplied=dataset is not None,
     )
 
@@ -245,7 +305,7 @@ def load_tokenizer(
             dataset_name,
         )
         if tokenizer_path.exists():
-            return Tokenizer.from_file(str(tokenizer_path))
+            return _configure_tokenizer(Tokenizer.from_file(str(tokenizer_path)))
 
     if dataset is None:
         raise FileNotFoundError(
@@ -261,13 +321,22 @@ def load_tokenizer(
     tokenizer.save(str(tokenizer_path))
 
     new_record: dict[str, object] = {
+        "schema_version": TOKENIZER_SCHEMA_VERSION,
         "path": str(tokenizer_path.relative_to(TOKENIZER_DIR)),
         "vocab_size": vocab_size,
+        "actual_vocab_size": tokenizer.get_vocab_size(),
         "git_commit": get_git_commit(),
         "dataset": dataset_name,
         "dataset_size_bytes": dataset_size_bytes,
+        "dataset_fingerprint": dataset_fingerprint,
+        "training_split": "train",
+        "min_frequency": TOKENIZER_MIN_FREQUENCY,
+        "special_tokens": SPECIAL_TOKENS,
+        "post_processor": "bos_eos",
         "trained_at": datetime.now(timezone.utc).isoformat(),
     }
+
+    new_record["tokenizer_sha256"] = _sha256_file(tokenizer_path)
 
     if metadata_record is not None:
         metadata[metadata.index(metadata_record)] = new_record
