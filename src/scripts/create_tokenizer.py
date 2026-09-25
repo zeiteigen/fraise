@@ -1,4 +1,4 @@
-from tokenizer import load_tokenizer
+from tokenizer import get_or_train_tokenizer
 from config import get_dataset_loader
 
 
@@ -8,4 +8,4 @@ def main():
         VOCAB_SIZE = 8192
     else:
         VOCAB_SIZE = int(VOCAB_SIZE)
-    load_tokenizer(vocab_size=VOCAB_SIZE, dataset=get_dataset_loader())
+    get_or_train_tokenizer(vocab_size=VOCAB_SIZE, dataset=get_dataset_loader())

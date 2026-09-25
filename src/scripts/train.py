@@ -9,10 +9,7 @@ from config import (
 from datasets_mgr import get_dataset_sources
 from tokenizer import load_tokenizer
 from train import pretrain_transformer
-from train.hyperparameters import (
-    _validate_hyperparameters,
-    allocate_dataset_token_budgets,
-)
+from train.hyperparameters import _validate_hyperparameters
 
 
 def _get_config_path(path: Path | None, prompt: str) -> Path:
@@ -41,6 +38,14 @@ def main(argv=None):
         type=Path,
         default=None,
         help="JSON file containing model configuration",
+    )
+    parser.add_argument(
+        "--tokenizer-file",
+        "--tokenizer",
+        dest="tokenizer_file",
+        type=Path,
+        default=None,
+        help="tokenizer JSON file to use for this run",
     )
     parser.add_argument(
         "--resume",
@@ -73,27 +78,30 @@ def main(argv=None):
         args.model_config,
         "Path to model configuration JSON: ",
     )
+    tokenizer_path = args.tokenizer_file
+    if tokenizer_path is None:
+        entered_path = input("Path to tokenizer JSON: ").strip()
+        if not entered_path:
+            raise ValueError("a tokenizer file path is required")
+        tokenizer_path = Path(entered_path).expanduser()
+
     training_hyperparameters = load_training_hyperparameters(
         training_hyperparameters_path
     )
     model_config = load_model_config(model_config_path)
     dataset = get_dataset_loader()
-    settings = _validate_hyperparameters(
+    _validate_hyperparameters(
         training_hyperparameters,
         model_config,
         get_dataset_sources(dataset, "train").keys(),
     )
-    token_budgets = allocate_dataset_token_budgets(
-        settings.max_train_tokens,
-        settings.dataset_token_percentages,
-    )
-
-    # Load the tokenizer
-    tokenizer = load_tokenizer(
-        vocab_size=model_config["vocab_size"],
-        dataset=dataset,
-        training_token_budgets=token_budgets,
-    )
+    # The selected tokenizer is explicit; metadata is retained for provenance.
+    tokenizer = load_tokenizer(tokenizer_path)
+    if tokenizer.get_vocab_size() != model_config["vocab_size"]:
+        raise ValueError(
+            "Tokenizer/model vocabulary mismatch: "
+            f"{tokenizer.get_vocab_size()} != {model_config['vocab_size']}"
+        )
 
     model_config = dict(model_config)
     model_config["vocab_size"] = tokenizer.get_vocab_size()

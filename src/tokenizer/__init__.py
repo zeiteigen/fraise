@@ -292,14 +292,22 @@ def _find_metadata_record(
     return matches[0] if matches else None
 
 
-def load_tokenizer(
+def load_tokenizer(tokenizer_path: str | Path) -> Tokenizer:
+    """Load and configure the tokenizer at the explicitly supplied path."""
+    path = Path(tokenizer_path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"tokenizer file does not exist: {path}")
+    return _configure_tokenizer(Tokenizer.from_file(str(path)))
+
+
+def get_or_train_tokenizer(
     vocab_size: int,
     dataset: Dataset | DatasetDict | None = None,
     *,
     training_token_budgets: Mapping[str, int] | None = None,
 ) -> Tokenizer:
     """
-    Load or train a tokenizer for ``vocab_size`` and ``dataset``.
+    Reuse or train a tokenizer for ``vocab_size`` and ``dataset``.
 
     A cached tokenizer is reusable only when metadata matches the supplied
     training dataset.  Metadata also supports loading older/custom paths.
@@ -369,9 +377,7 @@ def load_tokenizer(
                 or _sha256_file(recorded_path) == expected_sha256
             )
             if checksum_matches:
-                return _configure_tokenizer(
-                    Tokenizer.from_file(str(recorded_path))
-                )
+                return load_tokenizer(recorded_path)
 
     if dataset is None:
         raise FileNotFoundError(
@@ -452,4 +458,4 @@ def load_tokenizer(
 
     # Reload the persisted tokenizer rather than returning the in-memory
     # instance, ensuring callers always receive exactly what is on disk.
-    return Tokenizer.from_file(str(tokenizer_path))
+    return load_tokenizer(tokenizer_path)

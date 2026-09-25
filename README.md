@@ -13,20 +13,26 @@ The central question is:
 ## Training configuration
 
 Training reads two type-checked JSON files: one for training hyperparameters and
-one for the model configuration. Running `train` without the corresponding
-options prompts for both paths. Example files matching the previous defaults
-are available in `configs/`.
+one for the model configuration. It also requires the tokenizer JSON file to
+use for the run. Running `train` without these options prompts for each path.
 
 ```sh
 uv run train \
   --training-hyperparameters configs/training_hyperparameters.json \
-  --model-config configs/model_config.json
+  --model-config configs/model_config.json \
+  --tokenizer-file /path/to/fraise-8192-dataset-name.json
 ```
 
-If the files are not passed on the command line, enter their paths when
-prompted. Both source files are copied into the model run directory.
+If a path is not passed on the command line, enter it when prompted. The two
+configuration files are copied into the model run directory.
 The run directory also contains the exact tokenizer used for training as
 `tokenizer.json`, so inference does not depend on the local tokenizer cache.
+
+Create a tokenizer with `uv run create-tokenizer`. It prompts for the
+vocabulary size and writes the tokenizer under
+`data/tokenizers/fraise-<vocab-size>-<dataset-name>.json`. Its metadata record
+is stored in `data/tokenizers/metadata.json`. Pass the resulting file path to
+`train` with `--tokenizer-file`.
 
 Training hyperparameters include a token-mixture map. The percentages must
 name every loaded training dataset and sum to `100`; integer token budgets are
@@ -42,9 +48,3 @@ rounded so their total is exactly `max_train_tokens`.
 When a dataset contributes less than its complete token stream, pretraining
 uses its tokens from the beginning of the dataset rather than selecting random
 examples.
-
-The `train` command also uses those budgets when it must train a new base
-tokenizer. It estimates 4 UTF-8 bytes per token to limit the text read from
-each source, then tokenizes the selected training prefixes to the exact token
-budgets. The byte estimate affects tokenizer training speed; training still
-uses the configured token counts.

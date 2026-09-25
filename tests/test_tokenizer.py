@@ -85,7 +85,7 @@ class TokenizerCacheTests(unittest.TestCase):
                     "_train_tokenizer",
                     side_effect=AssertionError("tokenizer was retrained"),
                 ):
-                    loaded = tokenizer.load_tokenizer(32, dataset)
+                    loaded = tokenizer.get_or_train_tokenizer(32, dataset)
 
             self.assertEqual(loaded.get_vocab_size(), persisted.get_vocab_size())
 
@@ -105,7 +105,7 @@ class TokenizerCacheTests(unittest.TestCase):
                 "TOKENIZER_METADATA_FILE",
                 cache_dir / "metadata.json",
             ):
-                tokenizer.load_tokenizer(32, dataset)
+                tokenizer.get_or_train_tokenizer(32, dataset)
                 with (cache_dir / "metadata.json").open(
                     encoding="utf-8"
                 ) as metadata_file:
