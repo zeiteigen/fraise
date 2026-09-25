@@ -50,10 +50,15 @@ def main(argv=None):
     )
     parser.add_argument(
         "--model-name",
-        default="fraise_model",
+        default=None,
         help="run directory and final model name",
     )
     args = parser.parse_args(argv)
+
+    if not args.model_name:
+        args.model_name = input("Enter a name for the model: ").strip()
+        if not args.model_name:
+            raise ValueError("a model name is required")
 
     training_hyperparameters_path = _get_config_path(
         args.training_hyperparameters,

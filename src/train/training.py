@@ -32,6 +32,7 @@ from .hyperparameters import (
 from .packing import (
     PackedTokenBatch,
     iter_packed_batches,
+    pretokenize_split,
     special_token_id,
 )
 from .save_mgr import SaveManager
@@ -153,7 +154,6 @@ def _move_batch(
 def _evaluate(
     model: FraiseModel,
     split: Dataset,
-    tokenizer: Tokenizer,
     settings: TrainingSettings,
     pad_token_id: int,
 ) -> float | None:
@@ -165,12 +165,10 @@ def _evaluate(
     with torch.no_grad():
         for _, cpu_batch in iter_packed_batches(
             split,
-            tokenizer,
             settings.sequence_length,
             settings.packing_stride,
             pad_token_id,
             batch_size=settings.batch_size,
-            tokenization_batch_size=settings.tokenization_batch_size,
             seed=settings.seed,
             shuffle=False,
             max_tokens=settings.max_validation_tokens,
@@ -282,6 +280,25 @@ def pretrain_transformer(
             f"got {settings.warmup_steps} > {training_steps}"
         )
 
+    # Tokenize each split once before the first batch reaches the model.  The
+    # packed-batch iterators below only read token IDs, so repeated epochs and
+    # validation no longer redo CPU tokenization work.
+    train_split = pretokenize_split(
+        dataset["train"],
+        tokenizer,
+        tokenization_batch_size=settings.tokenization_batch_size,
+    )
+    validation_source = dataset.get("validation")
+    validation_split = (
+        pretokenize_split(
+            validation_source,
+            tokenizer,
+            tokenization_batch_size=settings.tokenization_batch_size,
+        )
+        if validation_source is not None
+        else None
+    )
+
     _seed_everything(settings.seed)
 
     model_config_for_training = dict(model_config)
@@ -334,8 +351,6 @@ def pretrain_transformer(
         )
 
     model_device = next(model.parameters()).device
-    train_split = dataset["train"]
-    validation_split = dataset.get("validation")
     last_grad_norm: float | None = None
 
     for epoch in range(state.epoch, settings.num_epochs):
@@ -352,12 +367,10 @@ def pretrain_transformer(
 
         for batch_index, cpu_batch in iter_packed_batches(
             train_split,
-            tokenizer,
             settings.sequence_length,
             settings.packing_stride,
             pad_token_id,
             batch_size=settings.batch_size,
-            tokenization_batch_size=settings.tokenization_batch_size,
             seed=settings.seed + epoch,
             shuffle=settings.shuffle,
             max_tokens=epoch_token_limit,
@@ -400,6 +413,14 @@ def pretrain_transformer(
                     scheduler,
                     training_state=state.as_checkpoint(),
                 )
+                save_manager.log(
+                    f"Checkpoint saved at global step {state.global_step} "
+                    f"and {state.tokens_seen} tokens."
+                    f" Last grad norm {last_grad_norm:.6f}"
+                    f" learning rate {scheduler.get_last_lr()[0]:.8g}"
+                    f" training loss {float(loss.item()):.6f}"
+                )
+                
 
             if state.tokens_seen >= settings.max_train_tokens:
                 break
@@ -416,7 +437,6 @@ def pretrain_transformer(
             validation_loss = _evaluate(
                 model,
                 validation_split,
-                tokenizer,
                 settings,
                 pad_token_id,
             )

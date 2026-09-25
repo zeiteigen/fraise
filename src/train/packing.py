@@ -1,4 +1,4 @@
-"""Tokenize Fraise text datasets and pack them into causal-LM batches."""
+"""Pre-tokenize Fraise datasets and pack them into causal-LM batches."""
 
 from collections import deque
 from collections.abc import Iterator
@@ -8,6 +8,10 @@ from itertools import islice
 import torch
 from datasets import Dataset
 from tokenizers import Tokenizer
+
+
+TOKEN_IDS_COLUMN = "token_ids"
+_TOKEN_SEQUENCE_BATCH_SIZE = 1_000
 
 
 @dataclass
@@ -27,29 +31,73 @@ def special_token_id(tokenizer: Tokenizer, token: str) -> int:
     return token_id
 
 
-def _token_sequences(
+def pretokenize_split(
     split: Dataset,
     tokenizer: Tokenizer,
     *,
     tokenization_batch_size: int,
-) -> Iterator[list[int]]:
-    """Yield BOS/EOS-wrapped token sequences from the dataset's text column."""
+) -> Dataset:
+    """Encode every document in ``split`` before packing starts.
+
+    The resulting dataset contains one ``token_ids`` list per input document.
+    Empty documents keep an empty list so the row order remains unchanged,
+    while the packer skips them just as it did for empty text values before
+    pre-tokenization was introduced.
+    """
     if "text" not in split.column_names:
         raise ValueError(
             "training datasets must contain a 'text' column; "
             f"available columns: {split.column_names}"
         )
+    if tokenization_batch_size <= 0:
+        raise ValueError(
+            "tokenization_batch_size must be positive; "
+            f"got {tokenization_batch_size}"
+        )
 
-    for batch in split.select_columns("text").iter(
-        batch_size=tokenization_batch_size
+    def encode_batch(batch: dict[str, list[object]]) -> dict[str, list[list[int]]]:
+        texts = batch["text"]
+        token_ids = [[] for _ in texts]
+        non_empty = [
+            (row_index, text)
+            for row_index, text in enumerate(texts)
+            if text
+        ]
+        if non_empty:
+            encodings = tokenizer.encode_batch(
+                [text for _, text in non_empty],
+                add_special_tokens=True,
+            )
+            for (row_index, _), encoding in zip(non_empty, encodings):
+                token_ids[row_index] = encoding.ids
+
+        return {TOKEN_IDS_COLUMN: token_ids}
+
+    return split.map(
+        encode_batch,
+        batched=True,
+        batch_size=tokenization_batch_size,
+        remove_columns=split.column_names,
+        desc="Tokenizing dataset",
+    )
+
+
+def _token_sequences(
+    split: Dataset,
+) -> Iterator[list[int]]:
+    """Yield pre-tokenized document sequences from a dataset split."""
+    if TOKEN_IDS_COLUMN not in split.column_names:
+        raise ValueError(
+            f"training datasets must contain a '{TOKEN_IDS_COLUMN}' column; "
+            f"available columns: {split.column_names}"
+        )
+
+    for batch in split.select_columns(TOKEN_IDS_COLUMN).iter(
+        batch_size=_TOKEN_SEQUENCE_BATCH_SIZE
     ):
-        texts = [text for text in batch["text"] if text]
-        if not texts:
-            continue
-
-        for encoding in tokenizer.encode_batch(texts, add_special_tokens=True):
-            if encoding.ids:
-                yield encoding.ids
+        for token_ids in batch[TOKEN_IDS_COLUMN]:
+            if token_ids:
+                yield token_ids
 
 
 def _make_block(
@@ -73,12 +121,10 @@ def _make_block(
 
 def iter_packed_blocks(
     split: Dataset,
-    tokenizer: Tokenizer,
     sequence_length: int,
     packing_stride: int,
     pad_token_id: int,
     *,
-    tokenization_batch_size: int,
     seed: int,
     shuffle: bool,
     max_tokens: int | None,
@@ -97,11 +143,7 @@ def iter_packed_blocks(
     buffer: deque[int] = deque()
     produced_tokens = 0
 
-    for sequence in _token_sequences(
-        split,
-        tokenizer,
-        tokenization_batch_size=tokenization_batch_size,
-    ):
+    for sequence in _token_sequences(split):
         buffer.extend(sequence)
 
         while len(buffer) >= sequence_length + 1:
@@ -156,13 +198,11 @@ def _stack(blocks: list[PackedTokenBatch]) -> PackedTokenBatch:
 
 def iter_packed_batches(
     split: Dataset,
-    tokenizer: Tokenizer,
     sequence_length: int,
     packing_stride: int,
     pad_token_id: int,
     *,
     batch_size: int,
-    tokenization_batch_size: int,
     seed: int,
     shuffle: bool,
     max_tokens: int | None,
@@ -174,11 +214,9 @@ def iter_packed_batches(
 
     for block in iter_packed_blocks(
         split,
-        tokenizer,
         sequence_length,
         packing_stride,
         pad_token_id,
-        tokenization_batch_size=tokenization_batch_size,
         seed=seed,
         shuffle=shuffle,
         max_tokens=max_tokens,

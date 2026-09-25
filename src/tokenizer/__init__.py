@@ -26,7 +26,11 @@ from datasets_mgr import (
 )
 
 
-TOKENIZER_DIR = Path("data/tokenizers")
+# Resolve the cache relative to the repository rather than the process's
+# current working directory.  CLI entry points and notebooks can be launched
+# from outside the project root.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+TOKENIZER_DIR = PROJECT_ROOT / "data" / "tokenizers"
 TOKENIZER_METADATA_FILE = TOKENIZER_DIR / "metadata.json"
 
 BATCH_SIZE = 1_000
@@ -258,10 +262,11 @@ def load_tokenizer(
     """
     Load or train a tokenizer for ``vocab_size`` and ``dataset``.
 
-    Existing tokenizers are selected using their requested vocabulary size,
-    dataset name, and dataset size in bytes.  When no dataset is supplied, a
-    tokenizer can still be loaded if exactly one metadata record has the
-    requested vocabulary size.
+    Existing canonical tokenizer files are selected by vocabulary size and
+    dataset name.  Metadata is retained as provenance and supports loading
+    older/custom paths.  When no dataset is supplied, a tokenizer can still
+    be loaded if exactly one metadata record has the requested vocabulary
+    size.
 
     If no matching tokenizer exists, ``dataset`` is required so a new one
     can be trained.  Metadata for every trained tokenizer is kept in
@@ -275,6 +280,21 @@ def load_tokenizer(
     dataset_name = (
         get_dataset_name(dataset) if dataset is not None else None
     )
+
+    # The filename is the stable cache key used by this project.  Metadata
+    # contains provenance, but it must not turn a reusable tokenizer into a
+    # cache miss when a dataset loader produces a different fingerprint for
+    # the same persisted data.  A changed tokenizer should be requested by
+    # removing this artifact (or by choosing a new vocabulary size).
+    tokenizer_path = _tokenizer_path(vocab_size, dataset_name)
+    if tokenizer_path.exists():
+        return _configure_tokenizer(Tokenizer.from_file(str(tokenizer_path)))
+    else:
+        print(
+            f"No tokenizer found at {tokenizer_path}. "
+            "A new one will be trained and persisted."
+        )
+
     training_dataset = (
         get_dataset_split(dataset, "train") if dataset is not None else None
     )
