@@ -358,6 +358,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "datasets" },
+    { name = "filelock" },
     { name = "huggingface-hub" },
     { name = "tokenizers" },
     { name = "torch" },
@@ -367,6 +368,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", specifier = ">=5.0.1" },
+    { name = "filelock", specifier = ">=3.0" },
     { name = "huggingface-hub", specifier = ">=1.32.0" },
     { name = "tokenizers", specifier = ">=0.23.2" },
     { name = "torch", specifier = ">=2.14.0" },

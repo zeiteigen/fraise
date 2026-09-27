@@ -26,6 +26,8 @@ from urllib.parse import quote
 from datasets import Dataset, DatasetDict, load_dataset
 from huggingface_hub import snapshot_download
 
+from .arrow_cache import ArrowCache
+
 
 BYTES_PER_GB = 1_000_000_000
 SourceKind: TypeAlias = Literal["dataset", "text_files"]
@@ -448,45 +450,77 @@ class HFDataset:
         *,
         validation_size_gb: float = 0.0,
         force_download: bool = False,
+        include_train: bool = True,
     ) -> DatasetResult:
-        """Download this source if needed and return a map-style HF dataset."""
+        """Download this source if needed and return selected map-style splits."""
         normalized_size = _validate_size_gb(size_gb, "size_gb")
         normalized_validation = _validate_validation_size_gb(validation_size_gb)
+        if not isinstance(include_train, bool):
+            raise TypeError("include_train must be a bool")
+        if not include_train and normalized_validation == 0:
+            raise ValueError("validation-only loading requires a validation split")
         files = self.download(
             normalized_size,
             validation_size_gb=normalized_validation,
             force_download=force_download,
         )
+        if not include_train and "validation" not in files:
+            raise ValueError("validation-only loading requires a validation split")
 
+        cache = ArrowCache(
+            self.data_dir / ".arrow-cache" / self.cache_prefix,
+            self._request(normalized_size, normalized_validation),
+        )
         is_native_snapshot = (
             self.source_kind == "text_files"
             and normalized_size is None
             and normalized_validation == 0
         )
-        if is_native_snapshot:
-            dataset = load_dataset(
-                "text",
-                data_files=[str(path) for path in files["train"]],
-                split=self.split,
-            )
-            return self._annotate(dataset, files["train"])
-
-        data_files: dict[str, str] = {}
+        selected_files: DownloadedFiles = {}
         for split, split_files in files.items():
+            if split == "train" and not include_train:
+                continue
             if split_files and any(path.stat().st_size > 0 for path in split_files):
-                data_files[split] = str(split_files[0])
-        if not data_files:
+                selected_files[split] = split_files
+        if not selected_files:
             raise ValueError(f"no rows were downloaded from {self.repo_id}")
 
-        loaded = load_dataset("json", data_files=data_files)
-        if not isinstance(loaded, DatasetDict):
-            # A mapping of split names normally returns DatasetDict, but keep
-            # this defensive branch for alternate datasets library versions.
-            loaded = DatasetDict({"train": loaded})
-
         annotated: dict[str, Dataset] = {}
-        for split, split_dataset in loaded.items():
-            annotated[split] = self._annotate(split_dataset, files[split])
+        missing: DownloadedFiles = {}
+        for split, split_files in selected_files.items():
+            cached = None if force_download else cache.load(split, split_files)
+            if cached is None:
+                missing[split] = split_files
+            else:
+                annotated[split] = cached
+
+        if missing:
+            if is_native_snapshot:
+                loaded = DatasetDict({
+                    "train": load_dataset(
+                        "text",
+                        data_files=[str(path) for path in missing["train"]],
+                        split=self.split,
+                    )
+                })
+            else:
+                data_files = {
+                    split: str(split_files[0])
+                    for split, split_files in missing.items()
+                }
+                loaded = load_dataset("json", data_files=data_files)
+                if not isinstance(loaded, DatasetDict):
+                    loaded = DatasetDict({next(iter(missing)): loaded})
+
+            for split, split_dataset in loaded.items():
+                if split not in missing:
+                    continue
+                annotated[split] = cache.store(
+                    split,
+                    missing[split],
+                    self._annotate(split_dataset, missing[split]),
+                    replace=force_download,
+                )
 
         if set(annotated) == {"train"}:
             return annotated["train"]
@@ -509,6 +543,7 @@ def load_hf_dataset(
     text_column: str = "text",
     token: str | bool | None = None,
     force_download: bool = False,
+    include_train: bool = True,
 ) -> DatasetResult:
     """Construct an :class:`HFDataset`, download it, and load its rows."""
     source = HFDataset(
@@ -528,6 +563,7 @@ def load_hf_dataset(
         size_gb=size_gb,
         validation_size_gb=validation_size_gb,
         force_download=force_download,
+        include_train=include_train,
     )
 
 

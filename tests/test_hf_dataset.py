@@ -14,6 +14,16 @@ from datasets_mgr import hf_dataset  # noqa: E402
 
 
 class HFDatasetTests(unittest.TestCase):
+    def test_validation_only_rejects_missing_validation_before_download(self):
+        with TemporaryDirectory() as directory:
+            source = hf_dataset.HFDataset(
+                repo_id="fixture/no-validation", data_dir=directory
+            )
+            with patch.object(hf_dataset.HFDataset, "download") as download:
+                with self.assertRaisesRegex(ValueError, "validation split"):
+                    source.load(include_train=False)
+                download.assert_not_called()
+
     def test_stream_download_is_bounded_and_split(self):
         rows = [
             {"text": "abc"},
@@ -65,6 +75,14 @@ class HFDatasetTests(unittest.TestCase):
                 )
             self.assertEqual(cached["train"]["text"], ["defgh"])
 
+            validation_only = source.load(
+                size_gb=6e-9,
+                validation_size_gb=3e-9,
+                include_train=False,
+            )
+            self.assertEqual(list(validation_only), ["validation"])
+            self.assertEqual(validation_only["validation"]["text"], ["abc"])
+
     def test_complete_text_file_source_uses_snapshot_download(self):
         def fake_snapshot_download(**kwargs):
             local_dir = Path(kwargs["local_dir"])
@@ -93,6 +111,77 @@ class HFDatasetTests(unittest.TestCase):
             self.assertEqual(result["text"], ["one", "two"])
             self.assertEqual(result.info.dataset_name, "fixture-files")
             snapshot_mock.assert_called_once()
+
+    def test_arrow_cache_skips_loading_and_invalidates_on_file_change(self):
+        with TemporaryDirectory() as directory:
+            source = hf_dataset.HFDataset(
+                repo_id="fixture/cache",
+                data_dir=directory,
+                dataset_name="fixture-cache",
+            )
+            with patch.object(
+                hf_dataset.HFDataset,
+                "_stream_source",
+                return_value=iter([{"text": "old"}]),
+            ):
+                first = source.load(size_gb=1e-8)
+
+            with patch.object(
+                hf_dataset,
+                "load_dataset",
+                side_effect=AssertionError("Arrow was regenerated"),
+            ):
+                second = hf_dataset.HFDataset(
+                    repo_id="fixture/cache",
+                    data_dir=directory,
+                    dataset_name="fixture-cache",
+                ).load(size_gb=1e-8)
+            self.assertEqual(second["text"], ["old"])
+            self.assertEqual(second._fingerprint, first._fingerprint)
+
+            source._output_path("train").write_text(
+                '{"text":"new"}\n', encoding="utf-8"
+            )
+            with patch.object(
+                hf_dataset.HFDataset,
+                "_stream_source",
+                side_effect=AssertionError("source was re-downloaded"),
+            ):
+                changed = source.load(size_gb=1e-8)
+            self.assertEqual(changed["text"], ["new"])
+
+    def test_partial_arrow_cache_only_reparses_missing_split(self):
+        with TemporaryDirectory() as directory:
+            source = hf_dataset.HFDataset(
+                repo_id="fixture/partial",
+                data_dir=directory,
+                dataset_name="fixture-partial",
+            )
+
+            def fake_load_dataset(path, *args, **kwargs):
+                if kwargs.get("streaming"):
+                    return iter([{"text": "abc"}, {"text": "def"}])
+                return real_load_dataset(path, *args, **kwargs)
+
+            with patch.object(hf_dataset, "load_dataset", side_effect=fake_load_dataset):
+                source.load(
+                    size_gb=6e-9,
+                    validation_size_gb=3e-9,
+                    include_train=False,
+                )
+            with patch.object(
+                hf_dataset, "load_dataset", side_effect=fake_load_dataset
+            ) as loader:
+                complete = source.load(
+                    size_gb=6e-9,
+                    validation_size_gb=3e-9,
+                )
+            self.assertEqual(complete["train"]["text"], ["def"])
+            self.assertEqual(complete["validation"]["text"], ["abc"])
+            self.assertEqual(
+                set(loader.call_args.kwargs["data_files"]),
+                {"train"},
+            )
 
 
 if __name__ == "__main__":
