@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from datasets import Dataset
 
@@ -13,6 +14,7 @@ from datasets_mgr import (  # noqa: E402
     get_dataset_sources,
     unified_dataset_loader,
 )
+import datasets_mgr  # noqa: E402
 from train.hyperparameters import (  # noqa: E402
     _validate_hyperparameters,
 )
@@ -21,7 +23,7 @@ from train.packing import (  # noqa: E402
     packed_target_capacity,
     pretokenize_split,
 )
-from train.training import _plan_training_budgets  # noqa: E402
+from train.budgets import _plan_training_budgets, _planned_training_steps  # noqa: E402
 
 
 class _Encoding:
@@ -36,6 +38,18 @@ class _LengthTokenizer:
 
 
 class TrainingDataMixTests(unittest.TestCase):
+    def test_interleaved_source_names_preserve_row_order_with_filter_fallback(self):
+        source = Dataset.from_dict(
+            {
+                "text": ["a1", "b1", "a2", "b2", "a3"],
+                DATASET_NAME_COLUMN: ["a", "b", "a", "b", "a"],
+            }
+        )
+        with patch.object(datasets_mgr, "_MAX_SOURCE_NAME_RANGES", 1):
+            sources = get_dataset_sources(source)
+        self.assertEqual(sources["a"]["text"], ["a1", "a2", "a3"])
+        self.assertEqual(sources["b"]["text"], ["b1", "b2"])
+
     def test_sources_are_retained_when_datasets_are_combined(self):
         first = Dataset.from_dict({"text": ["first"]})
         first.info.dataset_name = "first"
@@ -88,6 +102,39 @@ class TrainingDataMixTests(unittest.TestCase):
                     {},
                     {"first", "second"},
                 )
+
+    def test_minibatch_and_accumulation_settings(self):
+        base = {
+            "batch_size": 8,
+            "learning_rate": 1e-3,
+            "max_train_tokens": 10,
+            "num_epochs": 1,
+            "dataset_token_counts": {"first": 10},
+        }
+        for extra in (
+            {"minibatch_size": 2},
+            {"gradient_accumulation_steps": 4},
+            {"minibatch_size": 2, "gradient_accumulation_steps": 4},
+        ):
+            with self.subTest(extra=extra):
+                settings = _validate_hyperparameters({**base, **extra}, {}, {"first"})
+                self.assertEqual(settings.minibatch_size, 2)
+                self.assertEqual(settings.gradient_accumulation_steps, 4)
+
+        defaults = _validate_hyperparameters(base, {}, {"first"})
+        self.assertEqual(defaults.minibatch_size, 8)
+        self.assertEqual(defaults.gradient_accumulation_steps, 1)
+
+        for extra in (
+            {"minibatch_size": 0},
+            {"minibatch_size": None},
+            {"gradient_accumulation_steps": True},
+            {"minibatch_size": 3},
+            {"gradient_accumulation_steps": 3},
+            {"minibatch_size": 2, "gradient_accumulation_steps": 3},
+        ):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                _validate_hyperparameters({**base, **extra}, {}, {"first"})
 
     def test_prefix_tokenization_and_packing_use_exact_budget(self):
         source = Dataset.from_dict(
@@ -168,6 +215,41 @@ class TrainingDataMixTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "'first' is assigned 5"):
             _plan_training_budgets(splits, settings)
+
+    def test_scheduler_counts_partial_batches_in_each_epoch(self):
+        budgets = [{"first": 1}, {"first": 1}, {"first": 1}, {"first": 1}]
+        self.assertEqual(
+            _planned_training_steps(budgets, sequence_length=4, batch_size=8),
+            4,
+        )
+
+    def test_unloaded_zero_budget_source_needs_no_tokenized_split(self):
+        settings = _validate_hyperparameters(
+            {
+                "batch_size": 1,
+                "learning_rate": 1e-3,
+                "max_train_tokens": 2,
+                "num_epochs": 1,
+                "sequence_length": 4,
+                "dataset_token_counts": {"first": 2, "unused": 0},
+            },
+            {},
+            {"first", "unused"},
+        )
+        splits = {"first": Dataset.from_dict({"token_ids": [[1, 2, 3]]})}
+        budgets = _plan_training_budgets(splits, settings)[0]
+
+        batches = list(
+            iter_dataset_packed_batches(
+                splits,
+                budgets,
+                sequence_length=4,
+                packing_stride=4,
+                pad_token_id=0,
+                batch_size=1,
+            )
+        )
+        self.assertEqual(sum(int(batch.target_mask.sum()) for _, batch in batches), 2)
 
     def test_unbudgeted_tokenization_keeps_empty_rows_on_disk(self):
         source = Dataset.from_dict(

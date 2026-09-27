@@ -1,6 +1,6 @@
 """Dataset and JSON configuration loading for Fraise training scripts."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 import json
 import math
 from pathlib import Path
@@ -8,10 +8,16 @@ from typing import Any, TypeAlias, cast
 
 from components.model import ModelConfig
 from datasets_mgr import unified_dataset_loader
-from datasets_mgr.babylm import use_babylm
-from datasets_mgr.finewebedu import use_fineweb_edu
-from datasets_mgr.cosmopedia_khan import use_cosmopedia_khan_academy
-from datasets_mgr.cosmopedia_stories import use_cosmopedia_stories
+from datasets_mgr.babylm import DATASET_NAME as BABYLM_NAME, use_babylm
+from datasets_mgr.finewebedu import DATASET_NAME as FINEWEB_NAME, use_fineweb_edu
+from datasets_mgr.cosmopedia_khan import (
+    DATASET_NAME as KHAN_NAME,
+    use_cosmopedia_khan_academy,
+)
+from datasets_mgr.cosmopedia_stories import (
+    DATASET_NAME as STORIES_NAME,
+    use_cosmopedia_stories,
+)
 
 
 JsonConfig: TypeAlias = dict[str, Any]
@@ -80,6 +86,11 @@ _TRAINING_HYPERPARAMETER_TYPES: dict[str, JsonTypeCheck] = {
     "gradient_clip_norm": _is_number,
 }
 
+_OPTIONAL_TRAINING_HYPERPARAMETER_TYPES: dict[str, JsonTypeCheck] = {
+    "minibatch_size": _is_integer,
+    "gradient_accumulation_steps": _is_integer,
+}
+
 _MODEL_CONFIG_TYPES: dict[str, JsonTypeCheck] = {
     "vocab_size": _is_integer,
     "residual_stream_dim": _is_integer,
@@ -114,7 +125,9 @@ def _validate_config_types(
     config: JsonConfig,
     expected_types: dict[str, JsonTypeCheck],
     config_name: str,
+    optional_types: dict[str, JsonTypeCheck] | None = None,
 ) -> JsonConfig:
+    optional_types = optional_types or {}
     expected_keys = set(expected_types)
     actual_keys = set(config)
     missing_keys = sorted(expected_keys - actual_keys)
@@ -123,13 +136,15 @@ def _validate_config_types(
             f"{config_name} is missing required keys: {', '.join(missing_keys)}"
         )
 
-    unexpected_keys = sorted(actual_keys - expected_keys)
+    unexpected_keys = sorted(actual_keys - expected_keys - set(optional_types))
     if unexpected_keys:
         raise TypeError(
             f"{config_name} contains unexpected keys: {', '.join(unexpected_keys)}"
         )
 
-    for key, type_check in expected_types.items():
+    for key, type_check in (expected_types | optional_types).items():
+        if key not in config:
+            continue
         value = config[key]
         if not type_check(value):
             raise TypeError(
@@ -152,18 +167,41 @@ def load_training_hyperparameters(path: ConfigPath) -> JsonConfig:
         config,
         _TRAINING_HYPERPARAMETER_TYPES,
         "training hyperparameters",
+        _OPTIONAL_TRAINING_HYPERPARAMETER_TYPES,
     )
 
 
 def load_model_config(path: ConfigPath) -> ModelConfig:
-    """Load and type-check the model configuration JSON file."""
+    """Load and validate the model dimensions from a JSON file."""
     config = _load_json_object(path)
-    return cast(
-        ModelConfig,
-        _validate_config_types(config, _MODEL_CONFIG_TYPES, "model config"),
-    )
+    _validate_config_types(config, _MODEL_CONFIG_TYPES, "model config")
+    for name, value in config.items():
+        if value <= 0:
+            raise ValueError(f"model config['{name}'] must be positive")
+    if config["qk_dim"] % 2:
+        raise ValueError("model config['qk_dim'] must be even for RoPE")
+    return cast(ModelConfig, config)
 
 
-def get_dataset_loader():
-    """Construct the combined dataset only when a script starts doing work."""
-    return unified_dataset_loader([use_babylm(), use_fineweb_edu(), use_cosmopedia_khan_academy(), use_cosmopedia_stories()])
+DATASET_LOADERS = {
+    BABYLM_NAME: use_babylm,
+    FINEWEB_NAME: use_fineweb_edu,
+    KHAN_NAME: use_cosmopedia_khan_academy,
+    STORIES_NAME: use_cosmopedia_stories,
+}
+
+
+def get_dataset_loader(dataset_names: Collection[str] | None = None):
+    """Load the requested training sources and retain FineWeb validation."""
+    selected = set(DATASET_LOADERS) if dataset_names is None else set(dataset_names)
+    unknown = selected - DATASET_LOADERS.keys()
+    if unknown:
+        raise ValueError(f"unknown dataset name(s): {', '.join(sorted(unknown))}")
+
+    sources = []
+    for name, loader in DATASET_LOADERS.items():
+        if name in selected:
+            sources.append(loader())
+        elif name == FINEWEB_NAME and dataset_names is not None:
+            sources.append(loader(include_train=False))
+    return unified_dataset_loader(sources)

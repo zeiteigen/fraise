@@ -11,9 +11,17 @@ SRC_PATH = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC_PATH))
 
 from datasets_mgr import hf_dataset  # noqa: E402
+from datasets_mgr.finewebedu import use_fineweb_edu  # noqa: E402
 
 
 class HFDatasetTests(unittest.TestCase):
+    def test_fineweb_validation_only_download_is_bounded_to_validation_size(self):
+        with patch.object(hf_dataset.HFDataset, "load") as load:
+            use_fineweb_edu(include_train=False)
+        self.assertEqual(load.call_args.kwargs["size_gb"], 0.05)
+        self.assertEqual(load.call_args.kwargs["validation_size_gb"], 0.05)
+        self.assertFalse(load.call_args.kwargs["include_train"])
+
     def test_validation_only_rejects_missing_validation_before_download(self):
         with TemporaryDirectory() as directory:
             source = hf_dataset.HFDataset(

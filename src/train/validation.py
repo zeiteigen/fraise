@@ -29,14 +29,17 @@ def _evaluate(
             settings.sequence_length,
             settings.packing_stride,
             pad_token_id,
-            batch_size=settings.batch_size,
+            batch_size=settings.minibatch_size,
             seed=settings.seed,
             shuffle=False,
             max_tokens=settings.max_validation_tokens,
         ):
+            valid_count = int(cpu_batch.target_mask.sum().item())
+            if valid_count == 0:
+                continue
             batch = _move_batch(cpu_batch, model_device)
             with _autocast_context(settings.use_bf16):
-                result = _loss_for_batch(model, batch)
+                result = _loss_for_batch(model, batch, valid_count=valid_count)
             if result is None:
                 continue
 

@@ -2,11 +2,11 @@ import argparse
 from pathlib import Path
 
 from config import (
+    DATASET_LOADERS,
     get_dataset_loader,
     load_model_config,
     load_training_hyperparameters,
 )
-from datasets_mgr import get_dataset_sources
 from tokenizer import load_tokenizer
 from train import pretrain_transformer
 from train.hyperparameters import _validate_hyperparameters
@@ -89,12 +89,17 @@ def main(argv=None):
         training_hyperparameters_path
     )
     model_config = load_model_config(model_config_path)
-    dataset = get_dataset_loader()
     _validate_hyperparameters(
         training_hyperparameters,
         model_config,
-        get_dataset_sources(dataset, "train").keys(),
+        DATASET_LOADERS.keys(),
     )
+    active_sources = {
+        name
+        for name, count in training_hyperparameters["dataset_token_counts"].items()
+        if count > 0
+    }
+    dataset = get_dataset_loader(active_sources)
     # The selected tokenizer is explicit; metadata is retained for provenance.
     tokenizer = load_tokenizer(tokenizer_path)
     if tokenizer.get_vocab_size() != model_config["vocab_size"]:

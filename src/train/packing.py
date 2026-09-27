@@ -365,7 +365,11 @@ def iter_dataset_packed_batches(
     boundary, so integer rounding in the percentages does not overrun the
     requested budget.
     """
-    unknown_budgets = set(token_budgets) - set(splits)
+    unknown_budgets = {
+        name
+        for name, count in token_budgets.items()
+        if name not in splits and count != 0
+    }
     if unknown_budgets:
         raise ValueError(
             "token budgets contain unknown dataset name(s): "

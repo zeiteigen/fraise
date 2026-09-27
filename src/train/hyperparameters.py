@@ -4,13 +4,15 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 import math
 from numbers import Integral, Real
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class TrainingHyperparameters(TypedDict):
     """Configuration accepted by :func:`pretrain_transformer`."""
 
     batch_size: int
+    minibatch_size: NotRequired[int]
+    gradient_accumulation_steps: NotRequired[int]
     learning_rate: float
     betas: list[float]
     weight_decay: float
@@ -32,6 +34,8 @@ class TrainingHyperparameters(TypedDict):
 @dataclass(frozen=True)
 class TrainingSettings:
     batch_size: int
+    minibatch_size: int
+    gradient_accumulation_steps: int
     learning_rate: float
     betas: tuple[float, float]
     weight_decay: float
@@ -108,6 +112,30 @@ def _validate_hyperparameters(
 ) -> TrainingSettings:
     """Validate and normalize all settings that affect training state."""
     batch_size = _positive_int("batch_size", hyperparameters.get("batch_size"))
+    has_minibatch_size = "minibatch_size" in hyperparameters
+    has_accumulation_steps = "gradient_accumulation_steps" in hyperparameters
+    minibatch_size = (
+        _positive_int("minibatch_size", hyperparameters["minibatch_size"])
+        if has_minibatch_size
+        else batch_size
+    )
+    gradient_accumulation_steps = (
+        _positive_int(
+            "gradient_accumulation_steps",
+            hyperparameters["gradient_accumulation_steps"],
+        )
+        if has_accumulation_steps
+        else 1
+    )
+    if not has_minibatch_size and has_accumulation_steps:
+        minibatch_size = batch_size // gradient_accumulation_steps
+    elif not has_accumulation_steps and has_minibatch_size:
+        gradient_accumulation_steps = batch_size // minibatch_size
+    if minibatch_size * gradient_accumulation_steps != batch_size:
+        raise ValueError(
+            "minibatch_size * gradient_accumulation_steps must equal batch_size; "
+            f"got {minibatch_size} * {gradient_accumulation_steps} != {batch_size}"
+        )
     num_epochs = _positive_int("num_epochs", hyperparameters.get("num_epochs"))
     sequence_length = _positive_int(
         "sequence_length",
@@ -254,6 +282,8 @@ def _validate_hyperparameters(
 
     return TrainingSettings(
         batch_size=batch_size,
+        minibatch_size=minibatch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         learning_rate=float(learning_rate),
         betas=(normalized_betas[0], normalized_betas[1]),
         weight_decay=float(weight_decay),

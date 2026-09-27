@@ -24,6 +24,9 @@ allowed_splits: tuple[str, ...] = ("train", "validation", "test")
 # The deliberately private-looking name avoids colliding with user text data.
 DATASET_NAME_COLUMN = "__fraise_dataset_name__"
 
+_SOURCE_NAME_SCAN_BATCH_SIZE = 65_536
+_MAX_SOURCE_NAME_RANGES = 1_024
+
 
 def _dataset_names(dataset: DatasetSource | DatasetDict) -> set[str]:
     """Return the non-empty dataset names associated with a source."""
@@ -402,19 +405,82 @@ def get_dataset_sources(
             )
         return {dataset_name: source_split}
 
-    names = source_split[DATASET_NAME_COLUMN]
-    source_indices: dict[str, list[int]] = {}
-    for row_index, dataset_name in enumerate(names):
-        if not isinstance(dataset_name, str) or not dataset_name:
-            raise ValueError(
-                f"{DATASET_NAME_COLUMN!r} must contain non-empty strings; "
-                f"got {dataset_name!r} at row {row_index}"
+    source_ranges: dict[str, list[tuple[int, int]]] = {}
+    source_names: dict[str, None] = {}
+    collecting_ranges = True
+    range_count = 0
+    current_name: str | None = None
+    range_start = 0
+    row_index = 0
+
+    # The unified loader concatenates sources, so its name column usually has
+    # one contiguous range per source. Scan in bounded batches and represent
+    # those ranges directly instead of materializing the full column and a
+    # Python integer for every row.
+    for batch in source_split.select_columns(DATASET_NAME_COLUMN).iter(
+        batch_size=_SOURCE_NAME_SCAN_BATCH_SIZE
+    ):
+        for dataset_name in batch[DATASET_NAME_COLUMN]:
+            if not isinstance(dataset_name, str) or not dataset_name:
+                raise ValueError(
+                    f"{DATASET_NAME_COLUMN!r} must contain non-empty strings; "
+                    f"got {dataset_name!r} at row {row_index}"
+                )
+            source_names.setdefault(dataset_name, None)
+
+            if dataset_name != current_name:
+                if current_name is not None and collecting_ranges:
+                    source_ranges.setdefault(current_name, []).append(
+                        (range_start, row_index)
+                    )
+                    range_count += 1
+                    if range_count > _MAX_SOURCE_NAME_RANGES:
+                        # Shuffled or interleaved labels can have many runs.
+                        # Drop the bounded range metadata and use Arrow-backed
+                        # filters below rather than growing Python indexes.
+                        source_ranges.clear()
+                        collecting_ranges = False
+                current_name = dataset_name
+                range_start = row_index
+            row_index += 1
+
+    if current_name is not None and collecting_ranges:
+        source_ranges.setdefault(current_name, []).append((range_start, row_index))
+        range_count += 1
+        if range_count > _MAX_SOURCE_NAME_RANGES:
+            source_ranges.clear()
+            collecting_ranges = False
+
+    if collecting_ranges:
+        source_splits: dict[str, Dataset] = {}
+        for dataset_name, ranges in source_ranges.items():
+            segments = [
+                source_split.select(range(start, end))
+                for start, end in ranges
+            ]
+            source_splits[dataset_name] = (
+                segments[0]
+                if len(segments) == 1
+                else concatenate_datasets(segments)
             )
-        source_indices.setdefault(dataset_name, []).append(row_index)
+        return source_splits
+
+    def matches_source(
+        names: list[str],
+        *,
+        source_name: str,
+    ) -> list[bool]:
+        return [name == source_name for name in names]
 
     return {
-        dataset_name: source_split.select(indices)
-        for dataset_name, indices in source_indices.items()
+        dataset_name: source_split.filter(
+            matches_source,
+            input_columns=DATASET_NAME_COLUMN,
+            batched=True,
+            batch_size=_SOURCE_NAME_SCAN_BATCH_SIZE,
+            fn_kwargs={"source_name": dataset_name},
+        )
+        for dataset_name in source_names
     }
 
 

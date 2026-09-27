@@ -14,27 +14,28 @@ from .packing import PackedTokenBatch
 def _loss_for_batch(
     model: FraiseModel,
     batch: PackedTokenBatch,
+    *,
+    valid_count: int | None = None,
 ) -> tuple[torch.Tensor, int] | None:
     """Return the mean cross-entropy over non-padding targets."""
-    logits = model(batch.input_ids)
-
-    valid_targets = batch.target_mask.reshape(-1)
-    valid_count = int(valid_targets.sum().item())
+    if valid_count is None:
+        valid_count = int(batch.target_mask.sum().item())
     if valid_count == 0:
         return None
 
+    logits = model(batch.input_ids)
     flat_targets = batch.targets.reshape(-1)
-    selected_targets = flat_targets[valid_targets]
-    if int(selected_targets.min().item()) < 0 or int(
-        selected_targets.max().item()
-    ) >= logits.size(-1):
-        raise ValueError("target token ID is outside the model vocabulary")
-
-    loss = F.cross_entropy(
-        logits.reshape(-1, logits.size(-1))[valid_targets],
-        selected_targets,
-    )
-    if not bool(torch.isfinite(loss).item()):
+    flat_logits = logits.reshape(-1, logits.size(-1))
+    if valid_count == flat_targets.numel():
+        loss = F.cross_entropy(flat_logits, flat_targets)
+    else:
+        valid_targets = batch.target_mask.reshape(-1)
+        loss = F.cross_entropy(
+            flat_logits[valid_targets], flat_targets[valid_targets]
+        )
+    # Training checks gradients after backward. CPU validation can still give
+    # a direct loss error without synchronizing a CUDA stream.
+    if loss.device.type == "cpu" and not bool(torch.isfinite(loss).item()):
         raise FloatingPointError("non-finite loss detected")
     return loss, valid_count
 

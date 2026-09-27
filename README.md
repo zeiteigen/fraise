@@ -35,12 +35,21 @@ is stored in `data/tokenizers/metadata.json`. Pass the resulting file path to
 `train` with `--tokenizer-file`.
 
 Training hyperparameters include an absolute target-token count for every
-loaded training dataset. Counts must be non-negative integers and sum exactly
-to `max_train_tokens`. Use `0` to exclude a loaded source. Training checks
+configured training dataset. Counts must be non-negative integers and sum exactly
+to `max_train_tokens`. Use `0` to exclude a source. Training checks
 each source's tokenized capacity before the model starts; `num_epochs` allows
 the same source text to be used again until its configured count is met. These
 counts are causal target positions from the selected Fraise tokenizer, not
 BabyLM's whitespace-separated word count.
+
+`batch_size` is the number of packed sequences per optimizer step. To reduce
+the memory used by each forward pass, set `minibatch_size` and/or
+`gradient_accumulation_steps`. Their product must equal `batch_size`; either
+one can be omitted and will be derived from the other. For example,
+`"batch_size": 64, "minibatch_size": 8` runs eight minibatches before each
+optimizer step. Gradients are weighted by the number of valid target tokens,
+including in the final partial batch. Without these settings, training uses
+one minibatch per optimizer step.
 
 ```json
 {
@@ -58,6 +67,17 @@ When a dataset contributes less than its complete token stream, pretraining
 uses its tokens from the beginning of the dataset rather than selecting random
 examples.
 
-The BabyLM loader groups consecutive text into 200-word rows, keeping the
+Downloaded source files live under `data/raw/`. Their Arrow shards are pinned
+under each source's `.arrow-cache/` directory and reopened on later runs, so
+the source files do not need to be parsed again. Local hard links keep the
+Arrow cache from copying the large Hugging Face cache files on the same disk.
+Changing a source file or download request creates a fresh Arrow cache. The
+training command also skips loading and tokenizing sources assigned zero
+training tokens; FineWeb validation remains available when its training count
+is zero and downloads only the validation portion. Old `.arrow-cache/`
+directories can be removed to reclaim space;
+they are rebuilt when needed.
+
+The BabyLM loader groups consecutive text into 256-word rows, keeping the
 original newlines. Tokenization adds BOS and EOS once per row, so these markers
 are added once per passage rather than once per source line.

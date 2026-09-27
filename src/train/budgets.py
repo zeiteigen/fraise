@@ -46,3 +46,20 @@ def _plan_training_budgets(
         for name, budget in budgets.items():
             remaining[name] -= budget
     return plan
+
+
+def _planned_training_steps(
+    epoch_token_budgets: list[dict[str, int]],
+    *,
+    sequence_length: int,
+    batch_size: int,
+) -> int:
+    """Count optimizer steps, including short source and epoch tails."""
+    steps = 0
+    for budgets in epoch_token_budgets:
+        blocks = sum(
+            (count + sequence_length - 1) // sequence_length
+            for count in budgets.values()
+        )
+        steps += (blocks + batch_size - 1) // batch_size
+    return steps
