@@ -47,15 +47,15 @@ def _is_betas(value: object) -> bool:
     )
 
 
-def _is_dataset_token_percentages(value: object) -> bool:
+def _is_dataset_token_counts(value: object) -> bool:
     return (
         isinstance(value, dict)
         and bool(value)
         and all(
             isinstance(dataset_name, str)
             and bool(dataset_name)
-            and _is_number(percentage)
-            for dataset_name, percentage in value.items()
+            and _is_integer(count)
+            for dataset_name, count in value.items()
         )
     )
 
@@ -66,7 +66,7 @@ _TRAINING_HYPERPARAMETER_TYPES: dict[str, JsonTypeCheck] = {
     "learning_rate": _is_number,
     "betas": _is_betas,
     "weight_decay": _is_number,
-    "dataset_token_percentages": _is_dataset_token_percentages,
+    "dataset_token_counts": _is_dataset_token_counts,
     "warmup_steps": _is_integer,
     "sequence_length": _is_integer,
     "max_train_tokens": _is_integer,

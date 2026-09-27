@@ -174,6 +174,43 @@ def _token_sequences(
                 yield token_ids
 
 
+def packed_target_capacity(
+    split: Dataset,
+    sequence_length: int,
+    packing_stride: int,
+) -> int:
+    """Count target positions one epoch can produce from a tokenized split.
+
+    Arrow list offsets give the concatenated stream length without loading
+    every token ID into Python. This matches ``iter_packed_blocks`` including
+    repeated targets when windows overlap.
+    """
+    if TOKEN_IDS_COLUMN not in split.column_names:
+        raise ValueError(
+            f"training datasets must contain a '{TOKEN_IDS_COLUMN}' column"
+        )
+    if (
+        sequence_length < 2
+        or packing_stride < 1
+        or packing_stride > sequence_length
+    ):
+        raise ValueError("invalid sequence_length or packing_stride")
+
+    token_count = 0
+    for chunk in split.data.column(TOKEN_IDS_COLUMN).chunks:
+        offsets = chunk.offsets
+        token_count += offsets[-1].as_py() - offsets[0].as_py()
+
+    if token_count < 2:
+        return 0
+    if token_count <= sequence_length:
+        return token_count - 1
+
+    full_blocks = (token_count - sequence_length - 1) // packing_stride + 1
+    tail_tokens = token_count - full_blocks * packing_stride
+    return full_blocks * sequence_length + max(tail_tokens - 1, 0)
+
+
 def _make_block(
     token_ids: list[int],
     sequence_length: int,

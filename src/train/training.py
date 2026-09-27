@@ -1,192 +1,32 @@
 """The Fraise pretraining loop for the project's concrete model and data."""
 
-from collections.abc import Iterable, Mapping
-from contextlib import nullcontext
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable
+from concurrent.futures import Future, ProcessPoolExecutor
 import math
+import multiprocessing
 from pathlib import Path
-import platform
 import random
 
 import torch
-import torch.nn.functional as F
-from datasets import Dataset, DatasetDict
+from datasets import DatasetDict
 from tokenizers import Tokenizer
 from transformers.optimization import get_cosine_schedule_with_warmup
 
 from components import device
 from components.model import FraiseModel, ModelConfig
-from datasets_mgr import (
-    get_dataset_fingerprint,
-    get_dataset_name,
-    get_dataset_size_bytes,
-    get_dataset_sources,
-)
-from helpers.get_git_commit import get_git_snapshot
-from tokenizer import get_tokenizer_fingerprint
+from datasets_mgr import get_dataset_sources
 
+from .batch import _autocast_context, _loss_for_batch, _move_batch
+from .budgets import _plan_training_budgets
 from .hyperparameters import (
     TrainingHyperparameters,
-    TrainingSettings,
-    allocate_dataset_token_budgets,
     _validate_hyperparameters,
 )
-from .packing import (
-    PackedTokenBatch,
-    iter_dataset_packed_batches,
-    iter_packed_batches,
-    pretokenize_split,
-    special_token_id,
-)
+from .manifest import _run_manifest
+from .packing import iter_dataset_packed_batches, pretokenize_split, special_token_id
 from .save_mgr import SaveManager
-
-
-@dataclass
-class TrainingState:
-    """Counters needed to resume within an epoch.
-
-    SaveManager stores and restores RNG state alongside these counters; RNG
-    state is deliberately not part of this small bookkeeping object.
-    """
-
-    epoch: int = 0
-    next_batch_index: int = 0
-    global_step: int = 0
-    tokens_seen: int = 0
-    epoch_tokens_seen: int = 0
-    epoch_loss_sum: float = 0.0
-    epoch_valid_tokens: int = 0
-    optimizer_steps_in_epoch: int = 0
-
-    @classmethod
-    def from_checkpoint(cls, checkpoint: Mapping[str, object]) -> "TrainingState":
-        saved = checkpoint.get("training_state")
-        if not isinstance(saved, Mapping):
-            raise ValueError("checkpoint is missing training_state")
-
-        return cls(
-            epoch=int(saved["epoch"]),
-            next_batch_index=int(saved["next_batch_index"]),
-            global_step=int(saved["global_step"]),
-            tokens_seen=int(saved["tokens_seen"]),
-            epoch_tokens_seen=int(saved["epoch_tokens_seen"]),
-            epoch_loss_sum=float(saved["epoch_loss_sum"]),
-            epoch_valid_tokens=int(saved["epoch_valid_tokens"]),
-            optimizer_steps_in_epoch=int(saved["optimizer_steps_in_epoch"]),
-        )
-
-    def start_epoch(self, epoch: int) -> None:
-        self.epoch = epoch
-        self.next_batch_index = 0
-        self.epoch_tokens_seen = 0
-        self.epoch_loss_sum = 0.0
-        self.epoch_valid_tokens = 0
-        self.optimizer_steps_in_epoch = 0
-
-    def record_step(
-        self,
-        batch_index: int,
-        loss: float,
-        valid_tokens: int,
-    ) -> None:
-        self.global_step += 1
-        self.tokens_seen += valid_tokens
-        self.epoch_tokens_seen += valid_tokens
-        self.next_batch_index = batch_index + 1
-        self.epoch_loss_sum += loss * valid_tokens
-        self.epoch_valid_tokens += valid_tokens
-        self.optimizer_steps_in_epoch += 1
-
-    def finish_epoch(self) -> None:
-        self.epoch += 1
-        self.next_batch_index = 0
-        self.epoch_tokens_seen = 0
-        self.epoch_loss_sum = 0.0
-        self.epoch_valid_tokens = 0
-        self.optimizer_steps_in_epoch = 0
-
-    def as_checkpoint(self) -> dict[str, object]:
-        return asdict(self)
-
-
-def _loss_for_batch(
-    model: FraiseModel,
-    batch: PackedTokenBatch,
-) -> tuple[torch.Tensor, int] | None:
-    """Return the mean cross-entropy over non-padding targets."""
-    logits = model(batch.input_ids)
-
-    valid_targets = batch.target_mask.reshape(-1)
-    valid_count = int(valid_targets.sum().item())
-    if valid_count == 0:
-        return None
-
-    flat_targets = batch.targets.reshape(-1)
-    selected_targets = flat_targets[valid_targets]
-    if int(selected_targets.min().item()) < 0 or int(
-        selected_targets.max().item()
-    ) >= logits.size(-1):
-        raise ValueError("target token ID is outside the model vocabulary")
-
-    loss = F.cross_entropy(
-        logits.reshape(-1, logits.size(-1))[valid_targets],
-        selected_targets,
-    )
-    if not bool(torch.isfinite(loss).item()):
-        raise FloatingPointError("non-finite loss detected")
-    return loss, valid_count
-
-
-def _autocast_context(enabled: bool):
-    if not enabled:
-        return nullcontext()
-    return torch.autocast(device_type=device.type, dtype=torch.bfloat16)
-
-
-def _move_batch(
-    batch: PackedTokenBatch,
-    target_device: torch.device,
-) -> PackedTokenBatch:
-    return PackedTokenBatch(
-        input_ids=batch.input_ids.to(target_device, non_blocking=True),
-        targets=batch.targets.to(target_device, non_blocking=True),
-        target_mask=batch.target_mask.to(target_device, non_blocking=True),
-    )
-
-
-def _evaluate(
-    model: FraiseModel,
-    split: Dataset,
-    settings: TrainingSettings,
-    pad_token_id: int,
-) -> float | None:
-    """Compute token-weighted loss on the validation split."""
-    total_loss = 0.0
-    total_tokens = 0
-    model_device = next(model.parameters()).device
-
-    with torch.no_grad():
-        for _, cpu_batch in iter_packed_batches(
-            split,
-            settings.sequence_length,
-            settings.packing_stride,
-            pad_token_id,
-            batch_size=settings.batch_size,
-            seed=settings.seed,
-            shuffle=False,
-            max_tokens=settings.max_validation_tokens,
-        ):
-            batch = _move_batch(cpu_batch, model_device)
-            with _autocast_context(settings.use_bf16):
-                result = _loss_for_batch(model, batch)
-            if result is None:
-                continue
-
-            loss, valid_tokens = result
-            total_loss += float(loss.item()) * valid_tokens
-            total_tokens += valid_tokens
-
-    return total_loss / total_tokens if total_tokens else None
+from .state import TrainingState
+from .validation import _evaluate_checkpoint, _init_validation_worker
 
 
 def _seed_everything(seed: int) -> None:
@@ -200,47 +40,6 @@ def _seed_everything(seed: int) -> None:
     except ImportError:
         return
     np.random.seed(seed)
-
-
-def _dataset_manifest(dataset: DatasetDict) -> dict[str, object]:
-    splits: dict[str, object] = {}
-    for split_name, split_dataset in sorted(dataset.items()):
-        splits[split_name] = {
-            "rows": len(split_dataset),
-            "size_in_bytes": get_dataset_size_bytes(split_dataset),
-            "fingerprint": get_dataset_fingerprint(split_dataset),
-        }
-    return {
-        "name": get_dataset_name(dataset),
-        "fingerprint": get_dataset_fingerprint(dataset),
-        "splits": splits,
-    }
-
-
-def _run_manifest(
-    dataset: DatasetDict,
-    tokenizer: Tokenizer,
-    model_config: Mapping[str, object],
-    settings: TrainingSettings,
-) -> dict[str, object]:
-    return {
-        "manifest_version": 1,
-        "git": get_git_snapshot(),
-        "python_version": platform.python_version(),
-        "torch_version": torch.__version__,
-        "device": str(device),
-        "precision": "bf16-mixed" if settings.use_bf16 else "fp32",
-        "model_config": dict(model_config),
-        "training": asdict(settings),
-        "dataset": _dataset_manifest(dataset),
-        "tokenizer": {
-            "fingerprint": get_tokenizer_fingerprint(tokenizer),
-            "vocab_size": tokenizer.get_vocab_size(),
-            "pad_token_id": special_token_id(tokenizer, "<|pad|>"),
-            "bos_token_id": special_token_id(tokenizer, "<|bos|>"),
-            "eos_token_id": special_token_id(tokenizer, "<|eos|>"),
-        },
-    }
 
 
 def pretrain_transformer(
@@ -288,11 +87,6 @@ def pretrain_transformer(
             f"got {settings.warmup_steps} > {training_steps}"
         )
 
-    initial_token_budgets = allocate_dataset_token_budgets(
-        settings.max_train_tokens,
-        settings.dataset_token_percentages,
-    )
-
     # Tokenize each allocated training prefix once before the first batch
     # reaches the model. The packed-batch iterators below only read token IDs,
     # so repeated epochs do not redo CPU tokenization work or scan unused
@@ -302,10 +96,11 @@ def pretrain_transformer(
             source_split,
             tokenizer,
             tokenization_batch_size=settings.tokenization_batch_size,
-            max_tokens=initial_token_budgets[dataset_name],
+            max_tokens=settings.dataset_token_counts[dataset_name],
         )
         for dataset_name, source_split in raw_train_sources.items()
     }
+    epoch_token_budgets = _plan_training_budgets(train_splits, settings)
     validation_source = dataset.get("validation")
     validation_split = (
         pretokenize_split(
@@ -324,6 +119,9 @@ def pretrain_transformer(
     model_config_for_training.setdefault("max_seq_len", settings.sequence_length)
     model = FraiseModel(model_config_for_training)
     model.to(device)
+    # Module.compile() compiles calls while keeping the original module and
+    # state-dict keys intact for checkpoint save and resume.
+    model.compile()
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -368,11 +166,69 @@ def pretrain_transformer(
             f"{settings.sequence_length}-token context, "
             f"batch size {settings.batch_size}, "
             f"learning rate {settings.learning_rate}, "
-            f"precision {'BF16' if settings.use_bf16 else 'FP32'}."
+            f"precision {'BF16' if settings.use_bf16 else 'FP32'}, "
+            "torch.compile enabled."
         )
+    save_manager.log(
+        "Source target tokens: "
+        + ", ".join(
+            f"{name}={count:,}"
+            for name, count in settings.dataset_token_counts.items()
+        )
+    )
 
     model_device = next(model.parameters()).device
     last_grad_norm: float | None = None
+    validation_executor = (
+        ProcessPoolExecutor(
+            max_workers=1,
+            mp_context=multiprocessing.get_context("spawn"),
+            initializer=_init_validation_worker,
+            initargs=(
+                model_config_for_training,
+                validation_split,
+                settings,
+                pad_token_id,
+            ),
+        )
+        if validation_split is not None
+        else None
+    )
+    pending_validations: list[tuple[int, Future[float | None]]] = []
+    latest_validation: tuple[int, float] | None = None
+
+    def report_validations(*, wait: bool = False) -> None:
+        nonlocal latest_validation
+        while pending_validations and (wait or pending_validations[0][1].done()):
+            step, future = pending_validations.pop(0)
+            try:
+                validation_loss = future.result()
+            except Exception as exc:
+                save_manager.log(f"Validation failed at global step {step}: {exc}")
+                continue
+            if validation_loss is None:
+                save_manager.log(f"Validation loss unavailable at global step {step}.")
+            else:
+                latest_validation = (step, validation_loss)
+                save_manager.log(
+                    f"Validation loss at global step {step}: "
+                    f"{validation_loss:.6f}"
+                )
+
+    def queue_validation(checkpoint_path: Path) -> None:
+        if validation_executor is not None:
+            try:
+                future = validation_executor.submit(
+                    _evaluate_checkpoint,
+                    str(checkpoint_path),
+                )
+            except Exception as exc:
+                save_manager.log(
+                    f"Could not queue validation at global step "
+                    f"{state.global_step}: {exc}"
+                )
+            else:
+                pending_validations.append((state.global_step, future))
 
     for epoch in range(state.epoch, settings.num_epochs):
         if state.tokens_seen >= settings.max_train_tokens:
@@ -381,18 +237,11 @@ def pretrain_transformer(
             state.start_epoch(epoch)
 
         start_batch_index = state.next_batch_index
-        epoch_token_limit = state.epoch_tokens_seen + (
-            settings.max_train_tokens - state.tokens_seen
-        )
-        epoch_token_budgets = allocate_dataset_token_budgets(
-            epoch_token_limit,
-            settings.dataset_token_percentages,
-        )
         model.train()
 
         for batch_index, cpu_batch in iter_dataset_packed_batches(
             train_splits,
-            epoch_token_budgets,
+            epoch_token_budgets[epoch],
             settings.sequence_length,
             settings.packing_stride,
             pad_token_id,
@@ -432,12 +281,13 @@ def pretrain_transformer(
             last_grad_norm = grad_norm
 
             if state.global_step % settings.checkpoint_interval_steps == 0:
-                save_manager.save_checkpoint(
+                checkpoint_path = save_manager.save_checkpoint(
                     model,
                     optimizer,
                     scheduler,
                     training_state=state.as_checkpoint(),
                 )
+                queue_validation(checkpoint_path)
                 save_manager.log(
                     f"Checkpoint saved at global step {state.global_step} "
                     f"and {state.tokens_seen} tokens."
@@ -445,7 +295,8 @@ def pretrain_transformer(
                     f" learning rate {scheduler.get_last_lr()[0]:.8g}"
                     f" training loss {float(loss.item()):.6f}"
                 )
-                
+
+            report_validations()
 
             if state.tokens_seen >= settings.max_train_tokens:
                 break
@@ -456,30 +307,27 @@ def pretrain_transformer(
             )
 
         train_loss = state.epoch_loss_sum / state.epoch_valid_tokens
-        validation_loss = None
-        if validation_split is not None:
-            model.eval()
-            validation_loss = _evaluate(
-                model,
-                validation_split,
-                settings,
-                pad_token_id,
-            )
-
         optimizer_steps_in_epoch = state.optimizer_steps_in_epoch
         state.finish_epoch()
-        save_manager.save_checkpoint(
+        checkpoint_path = save_manager.save_checkpoint(
             model,
             optimizer,
             scheduler,
             training_state=state.as_checkpoint(),
         )
+        if state.global_step % settings.checkpoint_interval_steps != 0:
+            queue_validation(checkpoint_path)
+        report_validations()
 
-        validation_message = (
-            f", validation loss {validation_loss:.6f}"
-            if validation_loss is not None
-            else ", validation loss unavailable"
-        )
+        if latest_validation is not None:
+            validation_message = (
+                f", latest validation loss {latest_validation[1]:.6f} "
+                f"(step {latest_validation[0]})"
+            )
+        elif validation_split is not None:
+            validation_message = ", validation pending"
+        else:
+            validation_message = ", validation loss unavailable"
         current_lr = scheduler.get_last_lr()[0]
         save_manager.log(
             f"Epoch {epoch + 1}/{settings.num_epochs}: "
@@ -500,5 +348,8 @@ def pretrain_transformer(
             "increase num_epochs or provide more training data"
         )
 
+    report_validations(wait=True)
+    if validation_executor is not None:
+        validation_executor.shutdown()
     save_manager.finish(model, training_state=state.as_checkpoint())
     return model

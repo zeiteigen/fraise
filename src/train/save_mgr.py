@@ -20,6 +20,32 @@ TOKENIZER_FILE_NAME = "tokenizer.json"
 ConfigPath = str | Path
 
 
+def save_model_state_dict(
+    state_dict: Mapping[str, object], path: str | Path
+) -> Path:
+    """Atomically write a standalone model in the final-model format."""
+    destination = Path(path)
+    temporary_path = destination.with_name(f".{destination.name}.tmp")
+    torch.save(state_dict, temporary_path)
+    os.replace(temporary_path, destination)
+    return destination
+
+
+def load_checkpoint_file(path: str | Path) -> dict[str, object]:
+    """Read and validate a resumable training checkpoint on the CPU."""
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"expected a checkpoint dictionary in {path}")
+    if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
+        raise ValueError(
+            "unsupported checkpoint schema: "
+            f"{checkpoint.get('schema_version')!r}"
+        )
+    if not isinstance(checkpoint.get("model_state_dict"), Mapping):
+        raise ValueError(f"checkpoint is missing model_state_dict: {path}")
+    return checkpoint
+
+
 def capture_rng_state() -> dict[str, object]:
     """Capture RNG state stored with each training checkpoint."""
     state: dict[str, object] = {
@@ -308,16 +334,7 @@ class SaveManager:
         if self.latest_checkpoint is None:
             raise RuntimeError("no checkpoint has been selected for resuming")
 
-        checkpoint = torch.load(
-            self.latest_checkpoint,
-            map_location="cpu",
-            weights_only=False,
-        )
-        if checkpoint.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
-            raise ValueError(
-                "unsupported checkpoint schema: "
-                f"{checkpoint.get('schema_version')!r}"
-            )
+        checkpoint = load_checkpoint_file(self.latest_checkpoint)
 
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -337,9 +354,7 @@ class SaveManager:
             raise RuntimeError("No checkpoints have been saved.")
 
         final_path = self.save_dir / f"{self.model_name}.pt"
-        temporary_path = final_path.with_name(f".{final_path.name}.tmp")
-        torch.save(model.state_dict(), temporary_path)
-        os.replace(temporary_path, final_path)
+        save_model_state_dict(model.state_dict(), final_path)
 
         self.metadata.update(
             {

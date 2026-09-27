@@ -34,17 +34,30 @@ vocabulary size and writes the tokenizer under
 is stored in `data/tokenizers/metadata.json`. Pass the resulting file path to
 `train` with `--tokenizer-file`.
 
-Training hyperparameters include a token-mixture map. The percentages must
-name every loaded training dataset and sum to `100`; integer token budgets are
-rounded so their total is exactly `max_train_tokens`.
+Training hyperparameters include an absolute target-token count for every
+loaded training dataset. Counts must be non-negative integers and sum exactly
+to `max_train_tokens`. Use `0` to exclude a loaded source. Training checks
+each source's tokenized capacity before the model starts; `num_epochs` allows
+the same source text to be used again until its configured count is met. These
+counts are causal target positions from the selected Fraise tokenizer, not
+BabyLM's whitespace-separated word count.
 
 ```json
-"dataset_token_percentages": {
-  "babylm": 25,
-  "fineweb-edu": 75
+{
+  "max_train_tokens": 250000000,
+  "dataset_token_counts": {
+    "babylm": 100000000,
+    "fineweb-edu": 150000000,
+    "cosmopedia-khanacademy": 0,
+    "cosmopedia-stories": 0
+  }
 }
 ```
 
 When a dataset contributes less than its complete token stream, pretraining
 uses its tokens from the beginning of the dataset rather than selecting random
 examples.
+
+The BabyLM loader groups consecutive text into 200-word rows, keeping the
+original newlines. Tokenization adds BOS and EOS once per row, so these markers
+are added once per passage rather than once per source line.
