@@ -1,7 +1,7 @@
 """The Fraise pretraining loop for the project's concrete model and data."""
 
 from collections.abc import Iterable
-from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 import math
 import multiprocessing
 from pathlib import Path
@@ -32,6 +32,7 @@ from .prefetch import prefetch_batches
 from .save_mgr import SaveManager
 from .state import TrainingState
 from .validation import _evaluate_checkpoint, _init_validation_worker
+from .validation_queue import ValidationQueue
 
 
 def _seed_everything(seed: int) -> None:
@@ -208,41 +209,26 @@ def pretrain_transformer(
         if validation_split is not None
         else None
     )
-    pending_validations: list[tuple[int, Future[float | None]]] = []
-    latest_validation: tuple[int, float] | None = None
+    validation_queue = (
+        ValidationQueue(
+            lambda checkpoint_path: validation_executor.submit(
+                _evaluate_checkpoint, str(checkpoint_path)
+            ),
+            save_manager.log,
+        )
+        if validation_executor is not None
+        else None
+    )
 
-    def report_validations(*, wait: bool = False) -> None:
-        nonlocal latest_validation
-        while pending_validations and (wait or pending_validations[0][1].done()):
-            step, future = pending_validations.pop(0)
-            try:
-                validation_loss = future.result()
-            except Exception as exc:
-                save_manager.log(f"Validation failed at global step {step}: {exc}")
-                continue
-            if validation_loss is None:
-                save_manager.log(f"Validation loss unavailable at global step {step}.")
-            else:
-                latest_validation = (step, validation_loss)
-                save_manager.log(
-                    f"Validation loss at global step {step}: "
-                    f"{validation_loss:.6f}"
-                )
-
-    def queue_validation(checkpoint_path: Path) -> None:
-        if validation_executor is not None:
-            try:
-                future = validation_executor.submit(
-                    _evaluate_checkpoint,
-                    str(checkpoint_path),
-                )
-            except Exception as exc:
-                save_manager.log(
-                    f"Could not queue validation at global step "
-                    f"{state.global_step}: {exc}"
-                )
-            else:
-                pending_validations.append((state.global_step, future))
+    def prune_checkpoints() -> None:
+        save_manager.prune_checkpoints(
+            settings.checkpoint_keep_last,
+            protected=(
+                validation_queue.protected_paths()
+                if validation_queue is not None
+                else ()
+            ),
+        )
 
     try:
         for epoch in range(state.epoch, settings.num_epochs):
@@ -308,7 +294,8 @@ def pretrain_transformer(
                         scheduler,
                         training_state=state.as_checkpoint(),
                     )
-                    queue_validation(checkpoint_path)
+                    if validation_queue is not None:
+                        validation_queue.queue(state.global_step, checkpoint_path)
                     save_manager.log(
                         f"Checkpoint saved at global step {state.global_step} "
                         f"and {state.tokens_seen} tokens."
@@ -316,8 +303,10 @@ def pretrain_transformer(
                         f" learning rate {scheduler.get_last_lr()[0]:.8g}"
                         f" training loss {loss:.6f}"
                     )
+                    prune_checkpoints()
 
-                report_validations()
+                if validation_queue is not None:
+                    validation_queue.report()
 
                 if state.tokens_seen >= settings.max_train_tokens:
                     break
@@ -337,13 +326,16 @@ def pretrain_transformer(
                 training_state=state.as_checkpoint(),
             )
             if state.global_step % settings.checkpoint_interval_steps != 0:
-                queue_validation(checkpoint_path)
-            report_validations()
+                if validation_queue is not None:
+                    validation_queue.queue(state.global_step, checkpoint_path)
+            if validation_queue is not None:
+                validation_queue.report()
+            prune_checkpoints()
 
-            if latest_validation is not None:
+            if validation_queue is not None and validation_queue.latest is not None:
                 validation_message = (
-                    f", latest validation loss {latest_validation[1]:.6f} "
-                    f"(step {latest_validation[0]})"
+                    f", latest validation loss {validation_queue.latest[1]:.6f} "
+                    f"(step {validation_queue.latest[0]})"
                 )
             elif validation_split is not None:
                 validation_message = ", validation pending"
@@ -369,7 +361,9 @@ def pretrain_transformer(
                 "increase num_epochs or provide more training data"
             )
 
-        report_validations(wait=True)
+        if validation_queue is not None:
+            validation_queue.report(wait=True)
+        prune_checkpoints()
     finally:
         if validation_executor is not None:
             validation_executor.shutdown(cancel_futures=True)

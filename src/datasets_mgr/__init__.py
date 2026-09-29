@@ -214,7 +214,11 @@ def get_dataset_fingerprint(
     return hashlib.sha256(serialized).hexdigest()
 
 
-def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> DatasetDict:
+def unified_dataset_loader(
+    datasets: Sequence[DatasetSource | DatasetDict],
+    *,
+    source_column: bool = True,
+) -> DatasetDict:
     """Combine dataset sources into one dataset.
 
 
@@ -248,6 +252,9 @@ def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> D
     split_dataset_sizes: dict[str, list[int | None]] = {
         split_name: [] for split_name in allowed_splits
     }
+    source_splits: dict[str, dict[str, list[Dataset]]] = {
+        split_name: {} for split_name in allowed_splits
+    }
 
     for dataset in datasets:
         if not isinstance(dataset, (Dataset, IterableDataset, DatasetDict)):
@@ -269,8 +276,16 @@ def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> D
                     source_names = _dataset_names(dataset)
                     if len(source_names) == 1:
                         source_name = next(iter(source_names))
+                if source_name is None and not source_column:
+                    raise ValueError("source_column=False requires named datasets")
+                if source_name is not None:
+                    source_splits[split_name].setdefault(source_name, []).append(
+                        split_dataset
+                    )
                 splits[split_name].append(
                     _add_dataset_name_column(split_dataset, source_name)
+                    if source_column
+                    else split_dataset
                 )
                 split_download_sizes[split_name].append(
                     _dataset_source_size_bytes(split_dataset)
@@ -280,8 +295,14 @@ def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> D
                 )
         else:
             source_name = get_dataset_name(dataset)
+            if source_name is None and not source_column:
+                raise ValueError("source_column=False requires named datasets")
+            if source_name is not None:
+                source_splits["train"].setdefault(source_name, []).append(dataset)
             splits["train"].append(
                 _add_dataset_name_column(dataset, source_name)
+                if source_column
+                else dataset
             )
             split_download_sizes["train"].append(
                 _dataset_source_size_bytes(dataset)
@@ -319,7 +340,25 @@ def unified_dataset_loader(datasets: Sequence[DatasetSource | DatasetDict]) -> D
             info=info,
         )
 
-    return DatasetDict(combined_splits)
+    combined = DatasetDict(combined_splits)
+    # The caller that created this DatasetDict already knows source boundaries.
+    # Reuse those references during training instead of scanning every row of
+    # the combined dataset. A changed split fingerprint invalidates the map.
+    combined._fraise_source_map = {
+        split_name: (
+            split_dataset._fingerprint,
+            {
+                source_name: (
+                    segments[0]
+                    if len(segments) == 1
+                    else concatenate_datasets(segments)
+                )
+                for source_name, segments in source_splits[split_name].items()
+            },
+        )
+        for split_name, split_dataset in combined.items()
+    }
+    return combined
 
 
 def _add_dataset_name_column(
@@ -396,12 +435,23 @@ def get_dataset_sources(
     """
     source_split = get_dataset_split(dataset, split)
 
+    source_map = getattr(dataset, "_fraise_source_map", None)
+    if isinstance(source_map, dict):
+        cached = source_map.get(split)
+        if cached is not None and cached[0] == source_split._fingerprint:
+            return dict(cached[1])
+
     if DATASET_NAME_COLUMN not in source_split.column_names:
         dataset_name = get_dataset_name(source_split)
         if dataset_name is None:
             raise ValueError(
                 "training data must provide a non-empty dataset name; "
                 f"add {DATASET_NAME_COLUMN!r} when combining unnamed sources"
+            )
+        if "+" in dataset_name:
+            raise ValueError(
+                "source boundaries are unavailable for this combined dataset; "
+                "reload it or retain the source-name column"
             )
         return {dataset_name: source_split}
 

@@ -15,6 +15,7 @@ used by the existing dataset scripts (1 GB = 1,000,000,000 bytes).
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 import os
@@ -25,6 +26,7 @@ from urllib.parse import quote
 
 from datasets import Dataset, DatasetDict, load_dataset
 from huggingface_hub import snapshot_download
+from tokenizers import Tokenizer
 
 from .arrow_cache import ArrowCache
 
@@ -128,8 +130,11 @@ class HFDataset:
         self,
         size_gb: float | None,
         validation_size_gb: float,
+        *,
+        max_train_tokens: int | None = None,
+        tokenizer: Tokenizer | None = None,
     ) -> dict[str, Any]:
-        return {
+        request = {
             "repo_id": self.repo_id,
             "dataset_name": self.dataset_name,
             "config": self.config,
@@ -141,6 +146,32 @@ class HFDataset:
             "size_gb": size_gb,
             "validation_size_gb": validation_size_gb,
         }
+        if max_train_tokens is not None:
+            if tokenizer is None:
+                raise ValueError("tokenizer is required with max_train_tokens")
+            request["max_train_tokens"] = max_train_tokens
+            request["tokenizer_fingerprint"] = hashlib.sha256(
+                tokenizer.to_str().encode("utf-8")
+            ).hexdigest()
+        return request
+
+    def _validate_token_limit(
+        self,
+        max_train_tokens: int | None,
+        tokenizer: Tokenizer | None,
+    ) -> None:
+        if max_train_tokens is None:
+            return
+        if (
+            isinstance(max_train_tokens, bool)
+            or not isinstance(max_train_tokens, int)
+            or max_train_tokens <= 0
+        ):
+            raise ValueError("max_train_tokens must be a positive integer")
+        if tokenizer is None:
+            raise ValueError("tokenizer is required with max_train_tokens")
+        if self.source_kind != "dataset":
+            raise ValueError("max_train_tokens requires source_kind='dataset'")
 
     def _output_path(self, split: str) -> Path:
         return self.data_dir / f"{self.cache_prefix}_{split}.jsonl"
@@ -267,6 +298,9 @@ class HFDataset:
         size_gb: float | None,
         validation_size_gb: float,
         request: dict[str, Any],
+        *,
+        max_train_tokens: int | None = None,
+        tokenizer: Tokenizer | None = None,
     ) -> DownloadedFiles:
         """Stream rows into bounded JSONL files and return their paths."""
         total_limit = None if size_gb is None else int(size_gb * BYTES_PER_GB)
@@ -293,6 +327,7 @@ class HFDataset:
 
             stream = self._stream_source()
             written_bytes = 0
+            train_token_ids = 0
             for row in stream:
                 if not isinstance(row, Mapping):
                     raise TypeError(
@@ -310,6 +345,18 @@ class HFDataset:
                 )
                 handles[target_split].write(record)
                 written_bytes += row_size
+                if target_split == "train" and max_train_tokens is not None:
+                    text = row[self.text_column]
+                    if text:
+                        if tokenizer is None:
+                            raise ValueError(
+                                "tokenizer is required with max_train_tokens"
+                            )
+                        train_token_ids += len(
+                            tokenizer.encode(text, add_special_tokens=True).ids
+                        )
+                    if train_token_ids >= max_train_tokens + 1:
+                        break
 
                 # Rows are kept intact, so the final file may be slightly
                 # larger than the requested limit by one document.
@@ -390,6 +437,8 @@ class HFDataset:
         *,
         validation_size_gb: float = 0.0,
         force_download: bool = False,
+        max_train_tokens: int | None = None,
+        tokenizer: Tokenizer | None = None,
     ) -> DownloadedFiles:
         """Download this source and return files grouped by output split.
 
@@ -404,9 +453,15 @@ class HFDataset:
             and normalized_validation > normalized_size
         ):
             raise ValueError("validation_size_gb cannot be greater than size_gb")
+        self._validate_token_limit(max_train_tokens, tokenizer)
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        request = self._request(normalized_size, normalized_validation)
+        request = self._request(
+            normalized_size,
+            normalized_validation,
+            max_train_tokens=max_train_tokens,
+            tokenizer=tokenizer,
+        )
 
         if not force_download:
             cached = self._cached_files(request)
@@ -431,6 +486,8 @@ class HFDataset:
             normalized_size,
             normalized_validation,
             request,
+            max_train_tokens=max_train_tokens,
+            tokenizer=tokenizer,
         )
 
     def _annotate(self, dataset: Dataset, files: Sequence[Path]) -> Dataset:
@@ -451,6 +508,8 @@ class HFDataset:
         validation_size_gb: float = 0.0,
         force_download: bool = False,
         include_train: bool = True,
+        max_train_tokens: int | None = None,
+        tokenizer: Tokenizer | None = None,
     ) -> DatasetResult:
         """Download this source if needed and return selected map-style splits."""
         normalized_size = _validate_size_gb(size_gb, "size_gb")
@@ -463,13 +522,20 @@ class HFDataset:
             normalized_size,
             validation_size_gb=normalized_validation,
             force_download=force_download,
+            max_train_tokens=max_train_tokens,
+            tokenizer=tokenizer,
         )
         if not include_train and "validation" not in files:
             raise ValueError("validation-only loading requires a validation split")
 
         cache = ArrowCache(
             self.data_dir / ".arrow-cache" / self.cache_prefix,
-            self._request(normalized_size, normalized_validation),
+            self._request(
+                normalized_size,
+                normalized_validation,
+                max_train_tokens=max_train_tokens,
+                tokenizer=tokenizer,
+            ),
         )
         is_native_snapshot = (
             self.source_kind == "text_files"
@@ -544,6 +610,8 @@ def load_hf_dataset(
     token: str | bool | None = None,
     force_download: bool = False,
     include_train: bool = True,
+    max_train_tokens: int | None = None,
+    tokenizer: Tokenizer | None = None,
 ) -> DatasetResult:
     """Construct an :class:`HFDataset`, download it, and load its rows."""
     source = HFDataset(
@@ -564,6 +632,8 @@ def load_hf_dataset(
         validation_size_gb=validation_size_gb,
         force_download=force_download,
         include_train=include_train,
+        max_train_tokens=max_train_tokens,
+        tokenizer=tokenizer,
     )
 
 

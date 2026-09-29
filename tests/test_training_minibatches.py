@@ -114,6 +114,7 @@ class TrainingMinibatchTests(unittest.TestCase):
             **required,
             "minibatch_size": 2,
             "gradient_accumulation_steps": 4,
+            "checkpoint_keep_last": 3,
         }
         self.assertEqual(
             _validate_config_types(

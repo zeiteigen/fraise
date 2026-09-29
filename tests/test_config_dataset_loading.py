@@ -11,9 +11,43 @@ from datasets import Dataset, DatasetDict
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import config  # noqa: E402
+from datasets_mgr import DATASET_NAME_COLUMN, get_dataset_sources  # noqa: E402
 
 
 class DatasetSelectionTests(unittest.TestCase):
+    def test_training_loader_uses_token_limit_and_source_map(self):
+        calls = []
+        training = Dataset.from_dict({"text": ["training"]})
+        training.info.dataset_name = config.KHAN_NAME
+        validation = Dataset.from_dict({"text": ["validation"]})
+        validation.info.dataset_name = config.FINEWEB_NAME
+
+        def khan(**kwargs):
+            calls.append(("khan", kwargs))
+            return training
+
+        def fineweb(*, include_train=True):
+            self.assertFalse(include_train)
+            return DatasetDict({"validation": validation})
+
+        loaders = dict(config.DATASET_LOADERS)
+        loaders[config.KHAN_NAME] = khan
+        loaders[config.FINEWEB_NAME] = fineweb
+        tokenizer = object()
+        with patch.object(config, "DATASET_LOADERS", loaders):
+            combined = config.get_dataset_loader(
+                {config.KHAN_NAME},
+                tokenizer=tokenizer,
+                dataset_token_counts={config.KHAN_NAME: 7},
+            )
+
+        self.assertEqual(
+            calls,
+            [("khan", {"max_train_tokens": 7, "tokenizer": tokenizer})],
+        )
+        self.assertNotIn(DATASET_NAME_COLUMN, combined["train"].column_names)
+        self.assertIs(get_dataset_sources(combined)[config.KHAN_NAME], training)
+
     def test_model_config_rejects_invalid_dimensions_before_loading_data(self):
         valid = {
             "vocab_size": 8,

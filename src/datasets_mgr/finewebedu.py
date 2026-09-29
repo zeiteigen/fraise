@@ -1,6 +1,7 @@
 """FineWeb-Edu dataset source."""
 
 from pathlib import Path
+from tokenizers import Tokenizer
 
 from .hf_dataset import HFDataset
 
@@ -25,6 +26,8 @@ def use_fineweb_edu(
     data_dir: str | Path = DATA_DIR,
     force_download: bool = False,
     include_train: bool = True,
+    max_train_tokens: int | None = None,
+    tokenizer: Tokenizer | None = None,
 ):
     """Return FineWeb-Edu, optionally bounded to ``size_gb`` decimal GB."""
     if not include_train and validation_size_gb > 0:
@@ -44,6 +47,8 @@ def use_fineweb_edu(
         validation_size_gb=validation_size_gb,
         force_download=force_download,
         include_train=include_train,
+        max_train_tokens=max_train_tokens,
+        tokenizer=tokenizer,
     )
 
 

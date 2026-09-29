@@ -16,8 +16,9 @@ def estimate_parameter_count(config: ModelConfig) -> int:
     num_heads = config["num_heads"]
     hidden_dim = config["swiglu_up_dim"]
 
-    # The token embedding and language-model head have separate weights.
-    embeddings_and_head = 2 * vocab_size * model_dim + vocab_size
+    # Tying shares the embedding weights; the LM head keeps its own bias.
+    weight_matrices = 1 if config.get("tie_word_embeddings", False) else 2
+    embeddings_and_head = weight_matrices * vocab_size * model_dim + vocab_size
 
     # Q, K, V, and output projections have no biases.
     attention = 2 * model_dim * num_heads * (qk_dim + head_dim)

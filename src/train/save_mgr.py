@@ -1,6 +1,6 @@
 """Crash-resilient checkpoint and run-manifest management."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 import hashlib
 import json
 import os
@@ -18,6 +18,15 @@ META_FILE_NAME = "model_meta.json"
 CHECKPOINT_SCHEMA_VERSION = 2
 TOKENIZER_FILE_NAME = "tokenizer.json"
 ConfigPath = str | Path
+
+
+def _step_checkpoints(directory: Path) -> list[Path]:
+    numbered = []
+    for path in directory.glob("checkpoint_step_*.pt"):
+        suffix = path.stem.removeprefix("checkpoint_step_")
+        if suffix.isdecimal():
+            numbered.append((int(suffix), path))
+    return [path for _, path in sorted(numbered)]
 
 
 def save_model_state_dict(
@@ -44,6 +53,19 @@ def load_checkpoint_file(path: str | Path) -> dict[str, object]:
     if not isinstance(checkpoint.get("model_state_dict"), Mapping):
         raise ValueError(f"checkpoint is missing model_state_dict: {path}")
     return checkpoint
+
+
+def read_run_model_name(resume_from: str | Path) -> str:
+    """Read the model name stored beside a run checkpoint."""
+    resume_path = Path(resume_from).expanduser()
+    run_dir = resume_path if resume_path.is_dir() else resume_path.parent
+    metadata_path = run_dir / META_FILE_NAME
+    with metadata_path.open(encoding="utf-8") as metadata_file:
+        metadata = json.load(metadata_file)
+    model_name = metadata.get("model_name") if isinstance(metadata, dict) else None
+    if not isinstance(model_name, str) or not model_name:
+        raise ValueError(f"run metadata has no model_name: {metadata_path}")
+    return model_name
 
 
 def capture_rng_state() -> dict[str, object]:
@@ -115,7 +137,7 @@ class SaveManager:
         self.latest_checkpoint: Path | None = None
 
         if resume_from is not None:
-            resume_path = self._resolve_resume_path(Path(resume_from))
+            resume_path = self._resolve_resume_path(Path(resume_from).expanduser())
             self.save_dir = resume_path.parent
             self.metadata_path = self.save_dir / META_FILE_NAME
             if not self.metadata_path.exists():
@@ -123,6 +145,14 @@ class SaveManager:
                     f"checkpoint metadata not found at {self.metadata_path}"
                 )
             self.metadata = self._read_metadata()
+            saved_model_name = self.metadata.get("model_name")
+            if not isinstance(saved_model_name, str) or not saved_model_name:
+                raise ValueError(f"run metadata has no model_name: {self.metadata_path}")
+            if self.model_name != saved_model_name:
+                raise ValueError(
+                    "resume model_name does not match run metadata: "
+                    f"{self.model_name!r} != {saved_model_name!r}"
+                )
             saved_manifest = self.metadata.get("manifest")
             if manifest is not None and saved_manifest != manifest:
                 raise ValueError(
@@ -259,7 +289,7 @@ class SaveManager:
                 if latest_path.exists():
                     return latest_path
 
-        checkpoints = sorted(path.glob("checkpoint_step_*.pt"))
+        checkpoints = _step_checkpoints(path)
         if not checkpoints:
             raise FileNotFoundError(f"no step checkpoints found in {path}")
         return checkpoints[-1]
@@ -323,6 +353,24 @@ class SaveManager:
         )
         self._write_metadata()
         return checkpoint_path
+
+    def prune_checkpoints(
+        self,
+        keep_last: int,
+        *,
+        protected: Collection[Path] = (),
+    ) -> None:
+        """Retain recent checkpoints and files used by pending validation."""
+        if keep_last < 1:
+            raise ValueError("keep_last must be positive")
+
+        checkpoints = _step_checkpoints(self.save_dir)
+        retained = set(checkpoints[-keep_last:]) | set(protected)
+        if self.latest_checkpoint is not None:
+            retained.add(self.latest_checkpoint)
+        for checkpoint_path in checkpoints:
+            if checkpoint_path not in retained:
+                checkpoint_path.unlink()
 
     def load_checkpoint(
         self,

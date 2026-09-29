@@ -10,6 +10,7 @@ from config import (
 from tokenizer import load_tokenizer
 from train import pretrain_transformer
 from train.hyperparameters import _validate_hyperparameters
+from train.save_mgr import read_run_model_name
 
 
 def _get_config_path(path: Path | None, prompt: str) -> Path:
@@ -65,6 +66,8 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
 
+    if args.resume is not None and not args.model_name:
+        args.model_name = read_run_model_name(args.resume)
     if not args.model_name:
         args.model_name = input("Enter a name for the model: ").strip()
         if not args.model_name:
@@ -99,8 +102,6 @@ def main(argv=None):
         for name, count in training_hyperparameters["dataset_token_counts"].items()
         if count > 0
     }
-    dataset = get_dataset_loader(active_sources)
-    # The selected tokenizer is explicit; metadata is retained for provenance.
     tokenizer = load_tokenizer(tokenizer_path)
     if tokenizer.get_vocab_size() != model_config["vocab_size"]:
         raise ValueError(
@@ -110,6 +111,11 @@ def main(argv=None):
 
     model_config = dict(model_config)
     model_config["vocab_size"] = tokenizer.get_vocab_size()
+    dataset = get_dataset_loader(
+        active_sources,
+        tokenizer=tokenizer,
+        dataset_token_counts=training_hyperparameters["dataset_token_counts"],
+    )
 
     # Pretrain the transformer model
     pretrain_transformer(

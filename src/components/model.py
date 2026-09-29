@@ -6,7 +6,7 @@ from components.token_embeddings import TokenEmbedding
 from torch import nn
 
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 class ModelConfig(TypedDict):
     vocab_size: int
@@ -17,6 +17,7 @@ class ModelConfig(TypedDict):
     swiglu_up_dim: int
     num_layers: int
     max_seq_len: int
+    tie_word_embeddings: NotRequired[bool]
 
 class FraiseModel(nn.Module):
     def __init__(
@@ -44,6 +45,8 @@ class FraiseModel(nn.Module):
             num_layers,
         )
         self.lm_head = LMHead(residual_stream_dim, vocab_size)
+        if config.get("tie_word_embeddings", False):
+            self.lm_head.projection.weight = self.token_embedding.embedding.weight
 
     def forward(self, input_ids):
         if input_ids.size(1) > self.max_seq_len:

@@ -19,8 +19,10 @@ dependencies = [
 [project.scripts]
 create-tokenizer = "scripts.create_tokenizer:main"
 train = "scripts.train:main"
+visualize-training-data = "scripts.visualize_training_data:main"
 params = "scripts.calculate_params:main"
 checkpoint-to-model = "scripts.checkpoint_to_model:main"
+vis-train = "scripts.visualize_training_data:main"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]

@@ -25,6 +25,7 @@ class TrainingHyperparameters(TypedDict):
     max_validation_tokens: int | None
     seed: int
     checkpoint_interval_steps: int
+    checkpoint_keep_last: NotRequired[int]
     tokenization_batch_size: int
     use_bf16: bool
     shuffle: bool
@@ -48,6 +49,7 @@ class TrainingSettings:
     max_validation_tokens: int | None
     seed: int
     checkpoint_interval_steps: int
+    checkpoint_keep_last: int
     tokenization_batch_size: int
     use_bf16: bool
     shuffle: bool
@@ -244,6 +246,10 @@ def _validate_hyperparameters(
         "checkpoint_interval_steps",
         hyperparameters.get("checkpoint_interval_steps", 1000),
     )
+    checkpoint_keep_last = _positive_int(
+        "checkpoint_keep_last",
+        hyperparameters.get("checkpoint_keep_last", 2),
+    )
     tokenization_batch_size = _positive_int(
         "tokenization_batch_size",
         hyperparameters.get("tokenization_batch_size", 1000),
@@ -296,6 +302,7 @@ def _validate_hyperparameters(
         max_validation_tokens=max_validation_tokens,
         seed=int(seed),
         checkpoint_interval_steps=checkpoint_interval_steps,
+        checkpoint_keep_last=checkpoint_keep_last,
         tokenization_batch_size=tokenization_batch_size,
         use_bf16=use_bf16,
         shuffle=shuffle,

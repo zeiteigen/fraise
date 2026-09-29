@@ -5,6 +5,10 @@ import unittest
 from unittest.mock import patch
 
 from datasets import Dataset, DatasetDict, load_dataset as real_load_dataset
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.processors import TemplateProcessing
 
 
 SRC_PATH = Path(__file__).resolve().parents[1] / "src"
@@ -15,6 +19,70 @@ from datasets_mgr.finewebedu import use_fineweb_edu  # noqa: E402
 
 
 class HFDatasetTests(unittest.TestCase):
+    def test_token_limit_stops_stream_after_training_prefix(self):
+        tokenizer = Tokenizer(
+            WordLevel(
+                vocab={
+                    "[UNK]": 0,
+                    "[BOS]": 1,
+                    "[EOS]": 2,
+                    "hold": 3,
+                    "alpha": 4,
+                    "beta": 5,
+                    "gamma": 6,
+                    "unused": 7,
+                },
+                unk_token="[UNK]",
+            )
+        )
+        tokenizer.pre_tokenizer = Whitespace()
+        tokenizer.post_processor = TemplateProcessing(
+            single="[BOS] $A [EOS]",
+            special_tokens=[("[BOS]", 1), ("[EOS]", 2)],
+        )
+        rows = [
+            {"text": "hold"},
+            {"text": "alpha beta"},
+            {"text": "gamma"},
+            {"text": "unused"},
+        ]
+        with TemporaryDirectory() as directory:
+            source = hf_dataset.HFDataset(
+                repo_id="fixture/token-limited",
+                data_dir=directory,
+            )
+            with patch.object(
+                hf_dataset.HFDataset, "_stream_source", return_value=iter(rows)
+            ):
+                result = source.load(
+                    validation_size_gb=4e-9,
+                    max_train_tokens=6,
+                    tokenizer=tokenizer,
+                )
+
+            self.assertEqual(result["validation"]["text"], ["hold"])
+            self.assertEqual(result["train"]["text"], ["alpha beta", "gamma"])
+            with patch.object(
+                hf_dataset.HFDataset,
+                "_stream_source",
+                side_effect=AssertionError("token-limited source was re-read"),
+            ):
+                cached = source.load(
+                    validation_size_gb=4e-9,
+                    max_train_tokens=6,
+                    tokenizer=tokenizer,
+                )
+            self.assertEqual(cached["train"]["text"], ["alpha beta", "gamma"])
+
+    def test_token_limit_requires_tokenizer(self):
+        with TemporaryDirectory() as directory:
+            source = hf_dataset.HFDataset(
+                repo_id="fixture/token-limited",
+                data_dir=directory,
+            )
+            with self.assertRaisesRegex(ValueError, "tokenizer is required"):
+                source.download(max_train_tokens=1)
+
     def test_fineweb_validation_only_download_is_bounded_to_validation_size(self):
         with patch.object(hf_dataset.HFDataset, "load") as load:
             use_fineweb_edu(include_train=False)

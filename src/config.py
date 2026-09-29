@@ -1,9 +1,10 @@
 """Dataset and JSON configuration loading for Fraise training scripts."""
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 import json
 import math
 from pathlib import Path
+from tokenizers import Tokenizer
 from typing import Any, TypeAlias, cast
 
 from components.model import ModelConfig
@@ -89,6 +90,7 @@ _TRAINING_HYPERPARAMETER_TYPES: dict[str, JsonTypeCheck] = {
 _OPTIONAL_TRAINING_HYPERPARAMETER_TYPES: dict[str, JsonTypeCheck] = {
     "minibatch_size": _is_integer,
     "gradient_accumulation_steps": _is_integer,
+    "checkpoint_keep_last": _is_integer,
 }
 
 _MODEL_CONFIG_TYPES: dict[str, JsonTypeCheck] = {
@@ -100,6 +102,10 @@ _MODEL_CONFIG_TYPES: dict[str, JsonTypeCheck] = {
     "swiglu_up_dim": _is_integer,
     "num_layers": _is_integer,
     "max_seq_len": _is_integer,
+}
+
+_OPTIONAL_MODEL_CONFIG_TYPES: dict[str, JsonTypeCheck] = {
+    "tie_word_embeddings": _is_boolean,
 }
 
 
@@ -172,11 +178,13 @@ def load_training_hyperparameters(path: ConfigPath) -> JsonConfig:
 
 
 def load_model_config(path: ConfigPath) -> ModelConfig:
-    """Load and validate the model dimensions from a JSON file."""
+    """Load and validate model dimensions and options from a JSON file."""
     config = _load_json_object(path)
-    _validate_config_types(config, _MODEL_CONFIG_TYPES, "model config")
-    for name, value in config.items():
-        if value <= 0:
+    _validate_config_types(
+        config, _MODEL_CONFIG_TYPES, "model config", _OPTIONAL_MODEL_CONFIG_TYPES
+    )
+    for name in _MODEL_CONFIG_TYPES:
+        if config[name] <= 0:
             raise ValueError(f"model config['{name}'] must be positive")
     if config["qk_dim"] % 2:
         raise ValueError("model config['qk_dim'] must be even for RoPE")
@@ -191,17 +199,42 @@ DATASET_LOADERS = {
 }
 
 
-def get_dataset_loader(dataset_names: Collection[str] | None = None):
+def get_dataset_loader(
+    dataset_names: Collection[str] | None = None,
+    *,
+    tokenizer: Tokenizer | None = None,
+    dataset_token_counts: Mapping[str, int] | None = None,
+):
     """Load the requested training sources and retain FineWeb validation."""
     selected = set(DATASET_LOADERS) if dataset_names is None else set(dataset_names)
     unknown = selected - DATASET_LOADERS.keys()
     if unknown:
         raise ValueError(f"unknown dataset name(s): {', '.join(sorted(unknown))}")
+    if (tokenizer is None) != (dataset_token_counts is None):
+        raise ValueError("tokenizer and dataset_token_counts must be supplied together")
+    if dataset_token_counts is not None:
+        missing = selected - dataset_token_counts.keys()
+        if missing:
+            raise ValueError(
+                "dataset_token_counts is missing selected source(s): "
+                + ", ".join(sorted(missing))
+            )
 
     sources = []
     for name, loader in DATASET_LOADERS.items():
         if name in selected:
-            sources.append(loader())
+            if dataset_token_counts is not None and name != BABYLM_NAME:
+                sources.append(
+                    loader(
+                        max_train_tokens=dataset_token_counts[name],
+                        tokenizer=tokenizer,
+                    )
+                )
+            else:
+                sources.append(loader())
         elif name == FINEWEB_NAME and dataset_names is not None:
             sources.append(loader(include_train=False))
-    return unified_dataset_loader(sources)
+    return unified_dataset_loader(
+        sources,
+        source_column=dataset_token_counts is None,
+    )
