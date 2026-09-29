@@ -16,17 +16,20 @@ dependencies = [
     "transformers>=5.17.0",
 ]
 
+[project.optional-dependencies]
+notebooks = ["ipykernel>=7.3.0", "ipython>=9.17.1"]
+
 [project.scripts]
-create-tokenizer = "scripts.create_tokenizer:main"
-train = "scripts.train:main"
-visualize-training-data = "scripts.visualize_training_data:main"
-params = "scripts.calculate_params:main"
-checkpoint-to-model = "scripts.checkpoint_to_model:main"
-vis-train = "scripts.visualize_training_data:main"
+create-tokenizer = "fraise.cli.create_tokenizer:main"
+train = "fraise.cli.train:main"
+visualize-training-data = "fraise.cli.visualize_training_data:main"
+params = "fraise.cli.calculate_params:main"
+checkpoint-to-model = "fraise.cli.checkpoint_to_model:main"
+migrate-run = "fraise.cli.migrate_run:main"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "scripts"
+module-name = "fraise"

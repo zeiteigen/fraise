@@ -1,119 +1,229 @@
-Fraise explores a language-model architecture with **decoupled input and output vocabularies**: a large input vocabulary for lexical compression and a smaller output vocabulary for tractable autoregressive generation.
+# Fraise
 
-Large **macro-tokens** reduce expensive global transformer timesteps and can encode richer lexical units, while smaller **base tokens** preserve token-internal structure—the project is named after the famous _strawberry_ problem.
+Fraise explores language models with a large macro input vocabulary and a smaller
+base output vocabulary. The current implementation is the conventional
+byte-level BPE transformer baseline described in [PoC.md](PoC.md). Hierarchical
+composition, trie decoding, and dynamic decomposition remain experiment stages.
 
-Macro-tokens are composed from their base-token decomposition and can be **dynamically expanded** when finer structure is useful. This gives the model variable representational granularity and a mechanism for dynamically allocating transformer compute and KV-cache entries.
-
-During generation, the smaller output vocabulary is bridged back into the macro vocabulary using a **token trie**. The model generates base tokens until they form a valid macro-token, which is then fed back into the global transformer. **Multi-Token Prediction (MTP)** can accelerate this local decoding step by predicting several base tokens at once.
-
-The central question is:
-
-> **Can aggressive lexical compression reduce global transformer compute while preserving access to fine-grained structure when needed?**
-
-## Training configuration
-
-Training reads two type-checked JSON files: one for training hyperparameters and
-one for the model configuration. It also requires the tokenizer JSON file to
-use for the run. Running `train` without these options prompts for each path.
+## Setup
 
 ```sh
-uv run train \
-  --training-hyperparameters configs/training_hyperparameters.json \
-  --model-config configs/model_config.json \
-  --tokenizer-file /path/to/fraise-8192-dataset-name.json
+uv sync
+# For the notebooks:
+uv sync --extra notebooks
 ```
 
-To inspect the first 100 examples in the exact training order, run:
+The application is packaged under `fraise`. Commands use `./data` as the shared
+data root. Pass `--data-dir /path/to/data` or set `FRAISE_DATA_DIR` to use another
+location, including when running outside the repository. `--save-path` can
+separately override the parent directory of model runs.
+
+## Create a tokenizer
+
+Select the sources explicitly. Streaming sources default to a 0.1 GB download
+cap each; BabyLM uses its complete pinned native text snapshot. Optionally cap
+text consumed during tokenizer training with `--max-bytes-per-source`. Limits
+keep complete documents and can exceed the requested size by one document.
 
 ```sh
-uv run visualize-training-data \
-  --training-hyperparameters data/h.json \
-  --model-config data/mc.json \
-  --tokenizer-file data/tokenizers/fraise-8192-babylm-cosmopedia-khanacademy-cosmopedia-stories-fineweb-edu.json \
-  --first-source-only \
-  --output data/training_examples.html
+uv run create-tokenizer \
+  --vocab-size 8192 \
+  --sources babylm cosmopedia-khanacademy cosmopedia-stories fineweb-edu \
+  --source-size-gb 0.1 \
+  --max-bytes-per-source 100000000
 ```
 
-Open the HTML file to see decoded input and target windows, their source and
-batch position, and the complete token IDs and target mask. The command uses
-the same source loading, tokenization, epoch budgets, shuffle seed, stride,
-padding, and batch iterator as `train`. The shown configuration's first 100
-windows all come from BabyLM; `--first-source-only` avoids loading later sources
-that cannot affect these windows. Omit that flag to load and validate every
-configured training source. Use `--count` to change the number of examples.
+The command prints the tokenizer JSON path. Tokenizers and `metadata.json` live
+under `DATA_DIR/tokenizers`. Artifact filenames include the training request
+fingerprint, so creating another tokenizer preserves existing artifacts. A
+matching request reuses a tokenizer only when its checksum matches.
 
-If a path is not passed on the command line, enter it when prompted. The two
-configuration files are copied into the model run directory.
-The run directory also contains the exact tokenizer used for training as
-`tokenizer.json`, so inference does not depend on the local tokenizer cache.
+Loading a tokenizer preserves its saved vocabulary and post-processing. It must
+already contain `<|pad|>`, `<|bos|>`, and `<|eos|>`. Newly trained tokenizers add BOS
+and EOS once per document. Byte-level tokenizers require at least 259 vocabulary
+entries for the byte alphabet and special tokens.
 
-Set `"tie_word_embeddings": true` in the model configuration to share the
-LM head's weight matrix with the token embeddings. The LM head keeps its own
-bias. This option defaults to `false` when omitted, and `uv run params` accounts
-for the shared weights.
+## Configure and train
 
-Create a tokenizer with `uv run create-tokenizer`. It prompts for the
-vocabulary size and writes the tokenizer under
-`data/tokenizers/fraise-<vocab-size>-<dataset-name>.json`. Its metadata record
-is stored in `data/tokenizers/metadata.json`. Pass the resulting file path to
-`train` with `--tokenizer-file`.
+Training takes explicit JSON configuration and tokenizer paths. Commands do not
+prompt for missing arguments. JSON and Python callers use the same normalized
+configuration classes and defaults.
 
-Training hyperparameters include an absolute target-token count for every
-configured training dataset. Counts must be non-negative integers and sum exactly
-to `max_train_tokens`. Use `0` to exclude a source. Training checks
-each source's tokenized capacity before the model starts; `num_epochs` allows
-the same source text to be used again until its configured count is met. These
-counts are causal target positions from the selected Fraise tokenizer, not
-BabyLM's whitespace-separated word count.
-
-`batch_size` is the number of packed sequences per optimizer step. To reduce
-the memory used by each forward pass, set `minibatch_size` and/or
-`gradient_accumulation_steps`. Their product must equal `batch_size`; either
-one can be omitted and will be derived from the other. For example,
-`"batch_size": 64, "minibatch_size": 8` runs eight minibatches before each
-optimizer step. Gradients are weighted by the number of valid target tokens,
-including in the final partial batch. Without these settings, training uses
-one minibatch per optimizer step.
+Example model configuration:
 
 ```json
 {
+  "vocab_size": 8192,
+  "residual_stream_dim": 512,
+  "head_dim": 64,
+  "qk_dim": 64,
+  "num_heads": 8,
+  "swiglu_up_dim": 1536,
+  "num_layers": 8,
+  "max_seq_len": 512,
+  "tie_word_embeddings": false
+}
+```
+
+`max_seq_len` defaults to 2048 when omitted. `tie_word_embeddings` defaults to
+false; when true the embedding and output weights are shared and the output
+projection keeps its bias. `params MODEL_CONFIG.json` reports the corresponding
+parameter count.
+
+Example training configuration:
+
+```json
+{
+  "batch_size": 64,
+  "minibatch_size": 8,
+  "learning_rate": 0.0003,
+  "num_epochs": 1,
+  "sequence_length": 512,
   "max_train_tokens": 250000000,
   "dataset_token_counts": {
     "babylm": 100000000,
     "fineweb-edu": 150000000,
     "cosmopedia-khanacademy": 0,
     "cosmopedia-stories": 0
-  }
+  },
+  "max_validation_tokens": 1000000,
+  "shuffle": false,
+  "use_bf16": true
 }
 ```
 
-When a dataset contributes less than its complete token stream, pretraining
-uses its tokens from the beginning of the dataset rather than selecting random
-examples.
+The required training fields are `batch_size`, `learning_rate`, `num_epochs`,
+`max_train_tokens`, and `dataset_token_counts`. Dataset counts are non-negative
+integers, include every registered source, and sum exactly to `max_train_tokens`.
+Sources assigned zero tokens are skipped. Counts measure causal targets produced
+by the selected tokenizer, rather than words or an estimated byte/token ratio.
 
-For FineWeb-Edu and Cosmopedia, training stops the source download once the
-selected tokenizer has supplied enough training token IDs for that source's
-allocation, or when the source's byte limit is reached. The tokenizer
-fingerprint and allocation are part of the download cache key. BabyLM
-continues to use its pinned native text-file snapshot.
+`minibatch_size` defaults to `batch_size`. For existing configs,
+`gradient_accumulation_steps` may be supplied instead; it is normalized to a
+minibatch size and then derived for reporting. Their product must equal
+`batch_size`. Gradients are weighted by valid targets, including padded tails.
 
-Downloaded source files live under `data/raw/`. Their Arrow shards are pinned
-under each source's `.arrow-cache/` directory and reopened on later runs, so
-the source files do not need to be parsed again. Local hard links keep the
-Arrow cache from copying the large Hugging Face cache files on the same disk.
-Changing a source file or download request creates a fresh Arrow cache. The
-training command also skips loading and tokenizing sources assigned zero
-training tokens; FineWeb validation remains available when its training count
-is zero and downloads only the validation portion. Old `.arrow-cache/`
-directories can be removed to reclaim space;
-they are rebuilt when needed.
+Other defaults are defined in `fraise.config.training.TrainingSettings`:
+`betas=[0.9,0.999]`, `weight_decay=0`, `warmup_steps=0`, `sequence_length=512`,
+`packing_stride=sequence_length`, `seed=1337`, `checkpoint_interval_steps=1000`,
+`checkpoint_keep_last=2`, `tokenization_batch_size=1000`, `use_bf16=false`,
+`shuffle=true`, `gradient_clip_norm=1`, and `max_validation_tokens=null` (the
+complete held-out split). BF16 training requires a supporting CUDA device.
 
-Training retains the two most recent resumable checkpoints by default. Set
-`checkpoint_keep_last` in the training hyperparameters to retain a different
-number; checkpoints still needed by pending validation are kept until that
-validation finishes. Resuming from a run directory reads its model name from
-the run metadata when `--model-name` is omitted.
+```sh
+uv run train \
+  --training-hyperparameters configs/training_hyperparameters.json \
+  --model-config configs/model_config.json \
+  --tokenizer-file /path/to/tokenizer.json \
+  --model-name baseline-001
+```
 
-The BabyLM loader groups consecutive text into 256-word rows, keeping the
-original newlines. Tokenization adds BOS and EOS once per row, so these markers
-are added once per passage rather than once per source line.
+Training uses `torch.compile`. Sources are traversed in the fixed order BabyLM,
+FineWeb-Edu, Cosmopedia Khan Academy, and Cosmopedia stories. `shuffle` changes
+row order within each source, rather than interleaving sources. Documents form a
+continuous causal stream; BOS/EOS mark their boundaries without blocking
+attention between documents. A stride below the context length repeats targets
+across overlapping windows, and those repeats count toward the allocation.
+
+Each source is exhausted up to its capacity before later epochs reuse it. A
+capacity check rejects allocations unavailable within `num_epochs`. FineWeb
+reserves the first 0.05 GB of source text for validation even when its training
+allocation is zero. BabyLM groups consecutive source text into 256-word passages,
+preserving whitespace and adding document markers once per passage.
+
+## Preview the training data
+
+```sh
+uv run visualize-training-data \
+  --training-hyperparameters configs/training_hyperparameters.json \
+  --model-config configs/model_config.json \
+  --tokenizer-file /path/to/tokenizer.json \
+  --count 100 \
+  --first-source-only \
+  --output data/training_examples.html
+```
+
+Preview shares training's tokenization, epoch plan, seed, stride, padding, and
+batch iterator. Source labels travel with the packed windows. It skips held-out
+validation downloads. `--first-source-only` avoids later sources when the first
+source's first epoch supplies every requested window; otherwise omit the flag.
+
+## Runs, checkpoints, and inference
+
+Runs are stored under `DATA_DIR/models/MODEL_NAME`. Fresh runs refuse to overwrite
+a non-empty directory. Each run contains canonical `model_config.json` and
+`training_hyperparameters.json` archives, `tokenizer.json`, `model_meta.json`, an
+append-only `training.log`, step checkpoints, and the final `MODEL_NAME.pt`.
+Supplied configuration bytes are archived under their role-based filenames.
+
+```sh
+uv run train \
+  --training-hyperparameters configs/training_hyperparameters.json \
+  --model-config configs/model_config.json \
+  --tokenizer-file /path/to/tokenizer.json \
+  --resume data/models/baseline-001
+```
+
+When resuming, the model name comes from the run unless explicitly supplied.
+The latest numerically ordered step checkpoint is used, or pass a checkpoint
+file explicitly. Resume compares model, training, dataset, and tokenizer identity.
+Python/Torch versions, execution device, and Git provenance are recorded
+separately, so environment changes alone do not invalidate continuation.
+
+Training retains the newest two checkpoints by default. Active and pending CPU
+validation checkpoints remain protected until evaluation finishes. Validation
+has one active job and keeps only the newest requested successor. Final metadata
+records the latest validation result and any failures. Checkpoints include
+optimizer, scheduler, counters, and RNG state; the final model contains weights.
+
+```sh
+uv run checkpoint-to-model CHECKPOINT.pt OUTPUT.pt
+```
+
+Reusable inference functions live in `fraise.inference`. The notebooks in
+`notebooks/` call the same run loader, scoring, generation, and benchmark
+functions. Run loading preserves weight tying and the archived tokenizer.
+Generation uses full-context forward passes without a KV cache. Positive
+sampling temperatures work with the default nucleus sampler; optional top-k
+filtering can also be supplied.
+
+## Existing artifacts
+
+Existing tokenizer JSON files remain loadable without migration if they contain
+the required special tokens. The old tokenizer metadata index has an explicit
+migration that preserves tokenizer bytes and saves `metadata.v2.json`:
+
+```sh
+uv run create-tokenizer --migrate-metadata
+```
+
+Version-2 checkpoints and old final model weights load through a small key-name
+migration for the former embedding/output wrappers and SwiGLU spelling. To resume
+an old run, explicitly rebuild its manifest from its archived settings and the
+current source cache:
+
+```sh
+uv run migrate-run data/models/OLD_RUN
+```
+
+This can download missing source prefixes. It records a new dataset identity,
+keeps the original manifest and `model_meta.v2.json`, and leaves checkpoint/model
+bytes untouched. Use the same source text as the original experiment; migration
+cannot prove that re-downloaded unpinned remote sources match a historical cache.
+The old top-level Python import paths and redundant CLI aliases have been removed.
+
+## Storage and development
+
+Raw streaming downloads have request-specific directories under
+`DATA_DIR/raw/SOURCE/raw/`. Validation uses its own request cache and survives
+changes to training allocations. Arrow caches use local hard links when possible;
+source changes invalidate them. Tokenized prefixes are memory-mapped on disk and
+reused across epochs and resumes. Removing a cache causes it to be rebuilt.
+
+The package separates model components, configuration, source acquisition,
+tokenizer creation, training preparation, checkpoint storage, and inference.
+Small modules own their concrete behavior; package initializers stay lightweight.
+
+```sh
+uv run python -m unittest discover -s tests -v
+```

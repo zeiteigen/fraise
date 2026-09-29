@@ -1,13 +1,10 @@
 import json
-import sys
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from config import load_model_config  # noqa: E402
+from fraise.config import load_model_config
+from fraise.config.model import ModelConfig
 
 
 class ModelConfigTests(unittest.TestCase):
@@ -30,10 +27,16 @@ class ModelConfigTests(unittest.TestCase):
         self.path.write_text(json.dumps(self.config | option), encoding="utf-8")
 
     def test_weight_tying_is_optional_and_accepts_both_booleans(self):
-        for option in ({}, {"tie_word_embeddings": False}, {"tie_word_embeddings": True}):
+        for option in (
+            {},
+            {"tie_word_embeddings": False},
+            {"tie_word_embeddings": True},
+        ):
             with self.subTest(option=option):
                 self.write_config(option)
-                self.assertEqual(load_model_config(self.path), self.config | option)
+                self.assertEqual(
+                    load_model_config(self.path), ModelConfig(**(self.config | option))
+                )
 
     def test_weight_tying_rejects_non_boolean_values(self):
         for value in (0, 1, "true", "false", None, [], {}):

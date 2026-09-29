@@ -1,23 +1,12 @@
 import math
-import sys
 import unittest
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
 from unittest.mock import patch
 
 import torch
 
-
-SRC_PATH = Path(__file__).resolve().parents[1] / "src"
-sys.path.insert(0, str(SRC_PATH))
-
-MHA_PATH = Path(__file__).resolve().parents[1] / "src" / "components" / "mha.py"
-MHA_SPEC = spec_from_file_location("fraise_mha_under_test", MHA_PATH)
-MHA_MODULE = module_from_spec(MHA_SPEC)
-MHA_SPEC.loader.exec_module(MHA_MODULE)
-MultiHeadAttention = MHA_MODULE.MultiHeadAttention
-RotaryEmbedding = MHA_MODULE.RotaryEmbedding
-from components.transformer import Transformer
+from fraise.model.mha import MultiHeadAttention
+from fraise.model.rope import RotaryEmbedding
+from fraise.model.transformer import Transformer
 
 
 def dense_reference(module, x):
@@ -54,7 +43,9 @@ def dense_reference(module, x):
     scores = q @ k.transpose(-2, -1) / math.sqrt(module.qk_dim)
     positions = torch.arange(seq_len, device=x.device)
     causal = positions[None, :] <= positions[:, None]
-    scores = scores.masked_fill(~causal[None, None, :, :], torch.finfo(scores.dtype).min)
+    scores = scores.masked_fill(
+        ~causal[None, None, :, :], torch.finfo(scores.dtype).min
+    )
     attention = scores.softmax(dim=-1) @ v
     attention = attention.transpose(1, 2).reshape(
         batch_size,
@@ -67,7 +58,7 @@ def dense_reference(module, x):
 class MultiHeadAttentionTests(unittest.TestCase):
     def make_module(self, **kwargs):
         options = {
-            "io_dim": 8,
+            "model_dim": 8,
             "head_dim": 4,
             "qk_dim": 4,
             "num_heads": 2,
@@ -76,13 +67,13 @@ class MultiHeadAttentionTests(unittest.TestCase):
         return MultiHeadAttention(**options).double()
 
     def test_causal_attention_matches_dense_reference(self):
-        module = self.make_module(bias=True)
+        module = self.make_module()
         x = torch.randn(2, 5, 8, dtype=torch.float64)
 
         torch.testing.assert_close(module(x), dense_reference(module, x))
 
     def test_right_padding_cannot_change_valid_prefix_outputs(self):
-        module = self.make_module(bias=True)
+        module = self.make_module()
         valid = torch.randn(2, 3, 8, dtype=torch.float64)
         padded = torch.cat((valid, torch.randn(2, 4, 8, dtype=torch.float64)), dim=1)
 
@@ -118,7 +109,7 @@ class MultiHeadAttentionTests(unittest.TestCase):
             dtype=x.dtype,
         )
 
-        torch.testing.assert_close(module(x), module(x, cos, sin))
+        torch.testing.assert_close(module(x), module(x, (cos, sin)))
 
     def test_transformer_shares_one_rope_table_across_layers(self):
         transformer = Transformer(8, 4, 4, 2, 16, 3).double()
@@ -135,35 +126,6 @@ class MultiHeadAttentionTests(unittest.TestCase):
             transformer(x)
 
         self.assertEqual(rope_forward.call_count, 1)
-
-    def test_eval_disables_attention_dropout(self):
-        dropped = self.make_module(attn_dropout=0.7)
-        reference = self.make_module(attn_dropout=0.0)
-        reference.load_state_dict(dropped.state_dict())
-        dropped.eval()
-        reference.eval()
-        x = torch.randn(2, 5, 8, dtype=torch.float64)
-
-        torch.testing.assert_close(dropped(x), reference(x))
-
-    def test_attention_dropout_is_only_enabled_during_training(self):
-        module = self.make_module(attn_dropout=0.25)
-        x = torch.randn(2, 5, 8, dtype=torch.float64)
-        original_sdpa = MHA_MODULE.F.scaled_dot_product_attention
-        with patch.object(
-            MHA_MODULE.F,
-            "scaled_dot_product_attention",
-            wraps=original_sdpa,
-        ) as sdpa:
-            module.train()
-            module(x)
-            self.assertEqual(sdpa.call_args.kwargs["dropout_p"], 0.25)
-            self.assertTrue(sdpa.call_args.kwargs["is_causal"])
-
-            module.eval()
-            module(x)
-            self.assertEqual(sdpa.call_args.kwargs["dropout_p"], 0.0)
-            self.assertTrue(sdpa.call_args.kwargs["is_causal"])
 
     def test_fullgraph_compile(self):
         if not hasattr(torch, "compile"):

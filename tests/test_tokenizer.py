@@ -1,118 +1,82 @@
-import json
-import sys
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from unittest.mock import patch
 
-from datasets import Dataset, DatasetDict
+from datasets import Dataset
+from fixtures import tiny_tokenizer
 from tokenizers import Tokenizer
-from tokenizers.models import BPE
+from tokenizers.models import WordLevel
+
+from fraise.io import write_json
+from fraise.tokenizer import artifacts, loading
+from fraise.tokenizer.migration import migrate_metadata
+from fraise.tokenizer.training import iter_text_batches, train_tokenizer
 
 
-SRC_PATH = Path(__file__).resolve().parents[1] / "src"
-sys.path.insert(0, str(SRC_PATH))
+class TokenizerTests(unittest.TestCase):
+    def test_explicit_loading_preserves_saved_behavior(self):
+        tokenizer = Tokenizer(
+            WordLevel(vocab=tiny_tokenizer().get_vocab(), unk_token="<|pad|>")
+        )
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "tokenizer.json"
+            tokenizer.save(str(path))
+            loaded = loading.load_tokenizer(path)
+            self.assertEqual(loaded.to_str(), tokenizer.to_str())
+            self.assertEqual(loaded.encode("a").ids, [3])
 
-import tokenizer  # noqa: E402
+    def test_missing_special_tokens_are_rejected_without_repair(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "tokenizer.json"
+            Tokenizer(WordLevel(vocab={"a": 0})).save(str(path))
+            before = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "missing required token"):
+                loading.load_tokenizer(path)
+            self.assertEqual(path.read_bytes(), before)
 
-
-class TokenizerCacheTests(unittest.TestCase):
-    def test_budgeted_text_batches_stop_at_byte_limit(self):
+    def test_bounded_training_text_keeps_complete_documents(self):
         source = Dataset.from_dict({"text": ["é", "abc", "later"]})
-        batches = list(tokenizer._iter_text_batches(source, batch_size=3, max_bytes=3))
-        self.assertEqual(batches, [["é", "abc"]])
+        self.assertEqual(
+            list(iter_text_batches(source, batch_size=3, max_bytes=3)), [["é", "abc"]]
+        )
+        with self.assertRaises(ValueError):
+            train_tokenizer({"fixture": source}, 32)
 
-    def test_budgeted_tokenizer_training_uses_each_source_limit(self):
-        first = Dataset.from_dict({"text": ["a" * 10, "unused first"]})
-        first.info.dataset_name = "first"
-        second = Dataset.from_dict({"text": ["b" * 10, "unused second"]})
-        second.info.dataset_name = "second"
-        from datasets_mgr import unified_dataset_loader
-
-        combined = unified_dataset_loader([first, second])
-        seen = []
-        original = tokenizer._iter_text_batches
-
-        def record_batches(source, **kwargs):
-            for batch in original(source, **kwargs):
-                seen.extend(batch)
-                yield batch
-
-        with patch.object(tokenizer, "_iter_text_batches", side_effect=record_batches):
-            tokenizer._train_tokenizer(
-                combined, 32, {"first": 1, "second": 0}
-            )
-        self.assertEqual(seen, ["a" * 10])
-
-    def test_existing_tokenizer_file_does_not_retrain(self):
-        with TemporaryDirectory() as temporary_directory:
-            cache_dir = Path(temporary_directory)
-            dataset = Dataset.from_dict({"text": ["test document"]})
-            dataset.info.dataset_name = "fixture"
-
-            persisted = Tokenizer(BPE())
-            persisted.add_special_tokens(tokenizer.SPECIAL_TOKENS)
-
-            with patch.object(tokenizer, "TOKENIZER_DIR", cache_dir), patch.object(
-                tokenizer,
-                "TOKENIZER_METADATA_FILE",
-                cache_dir / "metadata.json",
+    def test_artifacts_reuse_matching_requests_and_preserve_other_corpora(self):
+        with TemporaryDirectory() as directory:
+            directory = Path(directory)
+            sources = {"fixture": Dataset.from_dict({"text": ["a b c d e"]})}
+            first = artifacts.create_tokenizer(sources, 300, directory)
+            before = first.read_bytes()
+            with patch.object(
+                artifacts, "train_tokenizer", side_effect=AssertionError("retrained")
             ):
-                cache_path = tokenizer._tokenizer_path(32, "fixture")
-                cache_path.parent.mkdir(parents=True, exist_ok=True)
-                persisted.save(str(cache_path))
-                tokenizer._write_metadata(
-                    [
-                        {
-                            "schema_version": tokenizer.TOKENIZER_SCHEMA_VERSION,
-                            "path": cache_path.name,
-                            "vocab_size": 32,
-                            "dataset": "fixture",
-                            "dataset_size_bytes": tokenizer.get_dataset_size_bytes(
-                                dataset
-                            ),
-                            "dataset_fingerprint": tokenizer.get_dataset_fingerprint(
-                                dataset
-                            ),
-                            "training_split": "train",
-                            "tokenizer_sha256": tokenizer._sha256_file(cache_path),
-                        }
-                    ]
+                self.assertEqual(
+                    artifacts.create_tokenizer(sources, 300, directory), first
                 )
+            second = artifacts.create_tokenizer(
+                {"fixture": Dataset.from_dict({"text": ["changed corpus"]})},
+                300,
+                directory,
+            )
+            self.assertNotEqual(first, second)
+            self.assertEqual(first.read_bytes(), before)
+            self.assertEqual(len(artifacts.read_metadata(directory)), 2)
 
-                with patch.object(
-                    tokenizer,
-                    "_train_tokenizer",
-                    side_effect=AssertionError("tokenizer was retrained"),
-                ):
-                    loaded = tokenizer.get_or_train_tokenizer(32, dataset)
-
-            self.assertEqual(loaded.get_vocab_size(), persisted.get_vocab_size())
-
-    def test_training_metadata_uses_train_source_size(self):
-        with TemporaryDirectory() as temporary_directory:
-            cache_dir = Path(temporary_directory)
-            train = Dataset.from_dict({"text": ["training document"]})
-            train.info.dataset_name = "fixture"
-            train.info.download_size = 123
-            validation = Dataset.from_dict({"text": ["validation document"]})
-            validation.info.dataset_name = "fixture"
-            validation.info.download_size = 456
-            dataset = DatasetDict({"train": train, "validation": validation})
-
-            with patch.object(tokenizer, "TOKENIZER_DIR", cache_dir), patch.object(
-                tokenizer,
-                "TOKENIZER_METADATA_FILE",
-                cache_dir / "metadata.json",
-            ):
-                tokenizer.get_or_train_tokenizer(32, dataset)
-                with (cache_dir / "metadata.json").open(
-                    encoding="utf-8"
-                ) as metadata_file:
-                    metadata = json.load(metadata_file)
-
-            self.assertEqual(metadata[0]["dataset_size_bytes"], 123)
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_legacy_metadata_has_an_explicit_migration(self):
+        with TemporaryDirectory() as directory:
+            directory = Path(directory)
+            tiny_tokenizer().save(str(directory / "old.json"))
+            write_json(
+                directory / "metadata.json",
+                {"tokenizers": [{"schema_version": 2, "path": "old.json"}]},
+            )
+            with self.assertRaisesRegex(ValueError, "migrate-metadata"):
+                artifacts.read_metadata(directory)
+            self.assertEqual(migrate_metadata(directory), 1)
+            self.assertEqual(artifacts.read_metadata(directory)[0]["schema_version"], 3)
+            backup = directory / "metadata.v2.json"
+            before = backup.read_bytes()
+            migrate_metadata(directory)
+            self.assertEqual(backup.read_bytes(), before)

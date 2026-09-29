@@ -1,84 +1,148 @@
-import sys
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from unittest.mock import patch
 
-from datasets import Dataset
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.pre_tokenizers import Whitespace
-from tokenizers.processors import TemplateProcessing
+import torch
+from fixtures import tiny_config, tiny_data, tiny_settings, tiny_tokenizer
 
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from components.model import FraiseModel  # noqa: E402
-from datasets_mgr import unified_dataset_loader  # noqa: E402
-from train.training import pretrain_transformer  # noqa: E402
+from fraise.io import read_json
+from fraise.model.model import FraiseModel
+from fraise.training.training import pretrain_transformer
 
 
 class TrainingRunTests(unittest.TestCase):
-    def test_small_run_uses_source_map_and_retains_latest_checkpoint(self):
-        vocab = {
-            "<|pad|>": 0,
-            "<|bos|>": 1,
-            "<|eos|>": 2,
-            "a": 3,
-            "b": 4,
-            "c": 5,
-            "d": 6,
-            "e": 7,
-        }
-        tokenizer = Tokenizer(WordLevel(vocab=vocab, unk_token="<|pad|>"))
-        tokenizer.pre_tokenizer = Whitespace()
-        tokenizer.post_processor = TemplateProcessing(
-            single="<|bos|> $A <|eos|>",
-            special_tokens=[("<|bos|>", 1), ("<|eos|>", 2)],
-        )
-        source = Dataset.from_dict({"text": ["a b c d e"]})
-        source.info.dataset_name = "fixture"
-        dataset = unified_dataset_loader([source], source_column=False)
-
-        settings = {
-            "batch_size": 1,
-            "learning_rate": 1e-3,
-            "dataset_token_counts": {"fixture": 4},
-            "num_epochs": 1,
-            "sequence_length": 2,
-            "max_train_tokens": 4,
-            "checkpoint_interval_steps": 1,
-            "checkpoint_keep_last": 1,
-            "shuffle": False,
-        }
-        model_config = {
-            "vocab_size": len(vocab),
-            "residual_stream_dim": 8,
-            "head_dim": 4,
-            "qk_dim": 4,
-            "num_heads": 2,
-            "swiglu_up_dim": 16,
-            "num_layers": 1,
-            "max_seq_len": 2,
-        }
-
-        with TemporaryDirectory() as directory:
-            with patch.object(FraiseModel, "compile", lambda self: None):
-                pretrain_transformer(
-                    tokenizer=tokenizer,
-                    dataset=dataset,
-                    hyperparameters=settings,
-                    model_config=model_config,
-                    save_path=directory,
-                    model_name="tiny",
-                )
-            run_dir = Path(directory) / "tiny"
+    def test_small_run_retains_latest_checkpoint_and_archives_inputs(self):
+        with (
+            TemporaryDirectory() as directory,
+            patch.object(FraiseModel, "compile", lambda self: None),
+        ):
+            pretrain_transformer(
+                tiny_tokenizer(),
+                tiny_data(),
+                tiny_settings(checkpoint_keep_last=1),
+                tiny_config(),
+                directory,
+                "tiny",
+                device="cpu",
+            )
+            run = Path(directory) / "tiny"
             self.assertEqual(
-                [path.name for path in run_dir.glob("checkpoint_step_*.pt")],
+                [path.name for path in run.glob("checkpoint_step_*.pt")],
                 ["checkpoint_step_00000002.pt"],
             )
-            self.assertTrue((run_dir / "tiny.pt").is_file())
+            for name in (
+                "tiny.pt",
+                "model_config.json",
+                "training_hyperparameters.json",
+                "tokenizer.json",
+                "training.log",
+            ):
+                self.assertTrue((run / name).is_file(), name)
+            meta = read_json(run / "model_meta.json")
+            self.assertTrue(meta["training_finished"])
+            self.assertNotIn("all_messages", meta)
 
+    def test_interrupted_resume_matches_uninterrupted_weights_and_schedule(self):
+        settings = tiny_settings(checkpoint_keep_last=2)
+        with (
+            TemporaryDirectory() as directory,
+            patch.object(FraiseModel, "compile", lambda self: None),
+        ):
+            original = pretrain_transformer(
+                tiny_tokenizer(),
+                tiny_data(),
+                settings,
+                tiny_config(),
+                directory,
+                "tiny",
+                device="cpu",
+            )
+            run = Path(directory) / "tiny"
+            checkpoint = run / "checkpoint_step_00000001.pt"
+            resumed = pretrain_transformer(
+                tiny_tokenizer(),
+                tiny_data(),
+                settings,
+                tiny_config(),
+                directory,
+                "tiny",
+                checkpoint,
+                device="cpu",
+            )
+            for name, weights in original.state_dict().items():
+                torch.testing.assert_close(
+                    resumed.state_dict()[name], weights, rtol=0, atol=0
+                )
+            final = torch.load(run / "checkpoint_step_00000002.pt", weights_only=False)
+            self.assertEqual(final["training_state"]["tokens_seen"], 4)
+            self.assertEqual(final["scheduler_state_dict"]["last_epoch"], 2)
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_separate_cpu_validation_completes_and_is_recorded(self):
+        with (
+            TemporaryDirectory() as directory,
+            patch.object(FraiseModel, "compile", lambda self: None),
+        ):
+            pretrain_transformer(
+                tiny_tokenizer(),
+                tiny_data(validation=True),
+                tiny_settings(max_validation_tokens=4),
+                tiny_config(),
+                directory,
+                "tiny",
+                device="cpu",
+            )
+            meta = read_json(Path(directory) / "tiny" / "model_meta.json")
+            self.assertIsNotNone(meta["validation"])
+            self.assertEqual(meta["validation"][0], 2)
+            self.assertEqual(meta["validation_failures"], [])
+
+    def test_resume_across_shuffled_source_and_epoch_boundaries(self):
+        from datasets import Dataset
+
+        from fraise.data.types import TrainingData
+
+        data = TrainingData(
+            {
+                "first": Dataset.from_dict({"text": ["a b c d e", "e d c b a"]}),
+                "second": Dataset.from_dict({"text": ["a c e b d"]}),
+            }
+        )
+        settings = tiny_settings(
+            batch_size=2,
+            minibatch_size=1,
+            num_epochs=2,
+            shuffle=True,
+            dataset_token_counts={"first": 16, "second": 4},
+            max_train_tokens=20,
+            checkpoint_keep_last=8,
+        )
+        with (
+            TemporaryDirectory() as directory,
+            patch.object(FraiseModel, "compile", lambda self: None),
+        ):
+            expected = pretrain_transformer(
+                tiny_tokenizer(),
+                data,
+                settings,
+                tiny_config(),
+                directory,
+                "tiny",
+                device="cpu",
+            )
+            for step in (1, 5):
+                checkpoint = Path(directory) / "tiny" / f"checkpoint_step_{step:08d}.pt"
+                resumed = pretrain_transformer(
+                    tiny_tokenizer(),
+                    data,
+                    settings,
+                    tiny_config(),
+                    directory,
+                    "tiny",
+                    checkpoint,
+                    device="cpu",
+                )
+                for name, weights in expected.state_dict().items():
+                    torch.testing.assert_close(
+                        resumed.state_dict()[name], weights, rtol=0, atol=0
+                    )

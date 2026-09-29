@@ -1,16 +1,10 @@
-import sys
-from pathlib import Path
-from threading import Event
 import unittest
+from threading import Event
 
 import torch
 
-
-SRC_PATH = Path(__file__).resolve().parents[1] / "src"
-sys.path.insert(0, str(SRC_PATH))
-
-from train.packing import PackedTokenBatch  # noqa: E402
-from train.prefetch import prefetch_batches  # noqa: E402
+from fraise.training.batch_types import PackedTokenBatch
+from fraise.training.prefetch import prefetch_batches
 
 
 class TrainingPrefetchTests(unittest.TestCase):

@@ -1,15 +1,11 @@
-import sys
-from pathlib import Path
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from datasets import Dataset
 
-
-SRC_PATH = Path(__file__).resolve().parents[1] / "src"
-sys.path.insert(0, str(SRC_PATH))
-
-from datasets_mgr import babylm  # noqa: E402
+from fraise.data import babylm
 
 
 class BabyLMChunkTests(unittest.TestCase):
@@ -17,11 +13,14 @@ class BabyLMChunkTests(unittest.TestCase):
         rows = ["one  two", "three four five\nsix", "", "seven eight"]
         chunks = list(babylm._chunk_text_rows(rows, 3))
 
-        self.assertEqual([chunk["text"] for chunk in chunks], [
-            "one  two\nthree",
-            " four five\nsix",
-            "\n\nseven eight",
-        ])
+        self.assertEqual(
+            [chunk["text"] for chunk in chunks],
+            [
+                "one  two\nthree",
+                " four five\nsix",
+                "\n\nseven eight",
+            ],
+        )
         self.assertEqual(
             "".join(chunk["text"] for chunk in chunks),
             "\n".join(rows),
@@ -32,8 +31,11 @@ class BabyLMChunkTests(unittest.TestCase):
         source.info.dataset_name = babylm.DATASET_NAME
         source.info.download_size = 42
 
-        with patch.object(babylm.HFDataset, "load", return_value=source):
-            result = babylm.use_babylm(words_per_chunk=2)
+        with TemporaryDirectory() as directory:
+            directory = Path(directory)
+            (directory / "one.train.txt").write_bytes(b"a" * 42)
+            with patch("datasets.load_dataset", return_value=source):
+                result = babylm.load_babylm(directory, words_per_chunk=2)
 
         self.assertEqual(result["text"], ["one two", "\nthree four", " five"])
         self.assertEqual(result.info.dataset_name, babylm.DATASET_NAME)
@@ -47,7 +49,7 @@ class BabyLMChunkTests(unittest.TestCase):
     def test_invalid_chunk_size_is_rejected(self):
         for value in (0, -1, True, 1.5):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                babylm.use_babylm(words_per_chunk=value)
+                babylm.load_babylm(Path("unused"), words_per_chunk=value)
 
 
 if __name__ == "__main__":
