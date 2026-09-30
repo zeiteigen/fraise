@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+npu = ["openvino>=2026.4"]
 notebooks = ["ipykernel>=7.3.0", "ipython>=9.17.1"]
 
 [project.scripts]

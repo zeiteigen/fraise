@@ -70,7 +70,7 @@ false; when true the embedding and output weights are shared and the output
 projection keeps its bias. `params MODEL_CONFIG.json` reports the corresponding
 parameter count.
 
-Example training configuration:
+The checked-in `hyperparameters.json` provides the training configuration:
 
 ```json
 {
@@ -86,15 +86,26 @@ Example training configuration:
     "cosmopedia-khanacademy": 0,
     "cosmopedia-stories": 0
   },
-  "max_validation_tokens": 1000000,
-  "shuffle": false,
-  "use_bf16": true
+  "max_validation_tokens": 32768,
+  "validation_timeout_seconds": 300,
+  "validation_cpu_threads": 4,
+  "validation_device": "npu",
+  "shuffle_per_epoch": false,
+  "shuffle_data": false,
+  "use_bf16": true,
+  "tied_weight_init_std": 0.02
 }
 ```
 
 The required training fields are `batch_size`, `learning_rate`, `num_epochs`,
 `max_train_tokens`, and `dataset_token_counts`. Dataset counts are non-negative
 integers, include every registered source, and sum exactly to `max_train_tokens`.
+Both `max_train_tokens` and the source counts apply to each epoch. Every epoch
+reuses the selected tokenized corpus with the same source allocations; total
+training exposure is `max_train_tokens * num_epochs`. For example, 150,000
+targets and three epochs produce 450,000 training targets, with a loss report
+and validation checkpoint at the end of each epoch. The learning-rate schedule
+covers all epochs.
 Sources assigned zero tokens are skipped. Counts measure causal targets produced
 by the selected tokenizer, rather than words or an estimated byte/token ratio.
 
@@ -107,26 +118,86 @@ Other defaults are defined in `fraise.config.training.TrainingSettings`:
 `betas=[0.9,0.999]`, `weight_decay=0`, `warmup_steps=0`, `sequence_length=512`,
 `packing_stride=sequence_length`, `seed=1337`, `checkpoint_interval_steps=1000`,
 `checkpoint_keep_last=2`, `tokenization_batch_size=1000`, `use_bf16=false`,
-`shuffle=true`, `gradient_clip_norm=1`, and `max_validation_tokens=null` (the
-complete held-out split). BF16 training requires a supporting CUDA device.
+`shuffle_per_epoch=true`, `shuffle_data=false`, `gradient_clip_norm=1`, `max_validation_tokens=32768`,
+`validation_timeout_seconds=300`, `validation_cpu_threads=4`, and
+`validation_device="cpu"`. The checked-in config selects `"npu"`. Set
+`max_validation_tokens` in `hyperparameters.json` to change the number of causal
+validation targets per checkpoint. Set it to `0` to disable validation: held-out
+data loading, tokenization, and CPU/NPU validation workers are skipped. `null`
+evaluates the complete held-out split; positive integers set a target limit.
+BF16 training requires a supporting CUDA device. CPU validation uses FP32.
+
+`tied_weight_init_std` is a training hyperparameter that defaults to 0.02 and
+must be a finite positive number. For a fresh run with `tie_word_embeddings`
+enabled, training initializes the shared weights from a zero-mean normal
+distribution with this standard deviation. Untied models keep their existing
+initialization. The value is archived in `training_hyperparameters.json` and
+the run manifest. Checkpoint loading and resumed training restore saved weights
+without applying this initialization; changing initialization requires a fresh run.
+
+For NPU validation, install OpenVINO and the Intel NPU user-space driver:
 
 ```sh
-uv run train \
-  --training-hyperparameters configs/training_hyperparameters.json \
+uv sync --extra npu
+bash scripts/install_npu_runtime.sh
+```
+
+The installer requires `curl` and `bsdtar` (libarchive). It downloads pinned,
+SHA-256-checked official Intel driver and Level Zero packages to
+`~/.local/share/fraise/npu-runtime/lib`; it does not install firmware or change
+kernel/system configuration. The backend loads these libraries in its worker.
+A system-installed Intel NPU runtime also works. The Linux kernel driver must
+already expose an accessible `/dev/accel` device. See
+[Intel's driver releases](https://github.com/intel/linux-npu-driver/releases/tag/v1.38.0).
+
+`validation_device="npu"` converts each checkpoint with `torch.export` to a
+static OpenVINO graph and explicitly compiles for `NPU`. Forward passes use the
+NPU's floating-point precision, typically FP16, with CPU FP32 loss reduction;
+validation losses can differ slightly from CPU FP32 results. One sequence is
+processed per NPU request, independently of the training minibatch size. Padded
+targets remain excluded from the loss. Logs verify `EXECUTION_DEVICES` and
+include conversion/compilation progress. Compilation is included in the timeout.
+There is no silent CPU fallback: discovery, conversion, or compilation failures
+are recorded as validation failures. Select `"cpu"` explicitly to use CPU
+validation. OpenVINO's NPU device API is documented
+[here](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/npu-device.html).
+
+Hardware regression tests can be run explicitly:
+
+```sh
+FRAISE_TEST_NPU=1 uv run --extra npu python -m unittest discover -s tests -p 'test_validation_npu.py' -v
+```
+
+```sh
+uv run --extra npu train \
+  --training-hyperparameters hyperparameters.json \
   --model-config configs/model_config.json \
   --tokenizer-file /path/to/tokenizer.json \
   --model-name baseline-001
 ```
 
-Training uses `torch.compile`. Sources are traversed in the fixed order BabyLM,
-FineWeb-Edu, Cosmopedia Khan Academy, and Cosmopedia stories. `shuffle` changes
-row order within each source, rather than interleaving sources. Documents form a
-continuous causal stream; BOS/EOS mark their boundaries without blocking
+Training uses `torch.compile`. `shuffle_per_epoch` shuffles passages within each
+source with `seed + epoch`, preserving token order inside each passage.
+`shuffle_data` randomly interleaves packed windows across all active sources
+before batching, while preserving each source's exact token allocation. Mixing
+uses bounded memory and samples sources according to their remaining window
+counts. With `shuffle_per_epoch=false`, the mixed order repeats each epoch;
+with it enabled, both passage order and source mixing change each epoch.
+Both controls are reproducible from `seed` and are shared by training and preview.
+
+When `shuffle_data=false`, sources are traversed in the fixed order BabyLM,
+FineWeb-Edu, Cosmopedia Khan Academy, and Cosmopedia stories. The legacy `shuffle`
+setting remains an alias for `shuffle_per_epoch`; old runs retain unmixed source
+order unless a fresh run enables `shuffle_data`.
+
+Documents within each source form a continuous causal stream before packing;
+BOS/EOS mark their boundaries without blocking
 attention between documents. A stride below the context length repeats targets
 across overlapping windows, and those repeats count toward the allocation.
 
-Each source is exhausted up to its capacity before later epochs reuse it. A
-capacity check rejects allocations unavailable within `num_epochs`. FineWeb
+Each source must supply its allocated targets in a single epoch. A
+capacity check rejects larger allocations even when multiple epochs are
+requested. FineWeb
 reserves the first 0.05 GB of source text for validation even when its training
 allocation is zero. BabyLM groups consecutive source text into 256-word passages,
 preserving whitespace and adding document markers once per passage.
@@ -135,7 +206,7 @@ preserving whitespace and adding document markers once per passage.
 
 ```sh
 uv run visualize-training-data \
-  --training-hyperparameters configs/training_hyperparameters.json \
+  --training-hyperparameters hyperparameters.json \
   --model-config configs/model_config.json \
   --tokenizer-file /path/to/tokenizer.json \
   --count 100 \
@@ -157,8 +228,8 @@ append-only `training.log`, step checkpoints, and the final `MODEL_NAME.pt`.
 Supplied configuration bytes are archived under their role-based filenames.
 
 ```sh
-uv run train \
-  --training-hyperparameters configs/training_hyperparameters.json \
+uv run --extra npu train \
+  --training-hyperparameters hyperparameters.json \
   --model-config configs/model_config.json \
   --tokenizer-file /path/to/tokenizer.json \
   --resume data/models/baseline-001
@@ -169,12 +240,30 @@ The latest numerically ordered step checkpoint is used, or pass a checkpoint
 file explicitly. Resume compares model, training, dataset, and tokenizer identity.
 Python/Torch versions, execution device, and Git provenance are recorded
 separately, so environment changes alone do not invalidate continuation.
+Runs created with the older total-run token budget can resume unchanged when
+they have one epoch. Older multi-epoch runs require a fresh run: their saved
+learning-rate schedules do not cover the new per-epoch token allocations.
 
-Training retains the newest two checkpoints by default. Active and pending CPU
-validation checkpoints remain protected until evaluation finishes. Validation
-has one active job and keeps only the newest requested successor. Final metadata
-records the latest validation result and any failures. Checkpoints include
-optimizer, scheduler, counters, and RNG state; the final model contains weights.
+Training retains the newest two checkpoints by default. Active and pending
+validation checkpoints remain protected until evaluation finishes. Every
+checkpoint receives a validation attempt. The queue holds one active checkpoint
+and one waiting checkpoint; when both slots are occupied, training waits before
+queuing another. This bounds disk usage without silently skipping checkpoints.
+
+`training.log` reports submissions, queued work, worker startup and PID,
+checkpoint loading, token progress, throughput, losses, errors, and timeouts.
+Worker messages are relayed independently of training steps. Each checkpoint's
+`validation_timeout_seconds` deadline includes worker initialization, checkpoint
+loading, and evaluation. A watchdog kills an overdue worker even while the
+training thread is busy; the next checkpoint starts a fresh worker. Exiting
+training allows idle workers two seconds to exit cleanly, then kills them if
+necessary. Interruption kills an active worker immediately. On Linux,
+workers also die automatically if their training parent disappears.
+
+Metadata records the latest validation result, failures, and the
+`validation_results` history during training, including attempt status and elapsed
+time. Resume preserves previous attempts. Checkpoints include optimizer,
+scheduler, counters, and RNG state; the final model contains weights.
 
 ```sh
 uv run checkpoint-to-model CHECKPOINT.pt OUTPUT.pt

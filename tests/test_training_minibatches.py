@@ -21,6 +21,24 @@ class TinyModel(torch.nn.Module):
 
 
 class TrainingMinibatchTests(unittest.TestCase):
+    def test_zero_validation_budget_returns_without_reading_a_split_or_running_model(
+        self,
+    ):
+        class UnusedModel(TinyModel):
+            def forward(self, ids):
+                raise AssertionError("disabled validation ran a forward pass")
+
+        model = UnusedModel()
+        self.assertIsNone(
+            evaluate(
+                model,
+                Dataset.from_dict({"unused": ["held-out text"]}),
+                SimpleNamespace(max_validation_tokens=0),
+                0,
+            )
+        )
+        self.assertTrue(model.training)
+
     def test_accumulated_gradients_match_full_batch_with_padding_and_short_tail(self):
         torch.manual_seed(17)
         full, accumulated = TinyModel(), TinyModel()

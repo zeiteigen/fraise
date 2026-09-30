@@ -34,6 +34,19 @@ class RunLifecycle:
         self.log = RunLog(self.artifacts.directory)
         self.keep_last = settings.checkpoint_keep_last
         self.last_validation_step = None
+        self.previous_validation_results = list(
+            self.artifacts.metadata.get("validation_results", [])
+        )
+        self.previous_validation_failures = list(
+            self.artifacts.metadata.get("validation_failures", [])
+        )
+
+    def record_validation(self, *, validation, validation_failures, validation_results):
+        self.artifacts.update(
+            validation=validation or self.artifacts.metadata.get("validation"),
+            validation_failures=self.previous_validation_failures + validation_failures,
+            validation_results=self.previous_validation_results + validation_results,
+        )
 
     def checkpoint(self, runtime, state, validation):
         path = self.checkpoints.save(
@@ -57,7 +70,7 @@ class RunLifecycle:
         self.artifacts.finish(
             runtime.model,
             state,
-            validation=validation.latest,
-            validation_failures=validation.failures,
+            validation=validation.latest or self.artifacts.metadata.get("validation"),
+            validation_failures=self.artifacts.metadata.get("validation_failures", []),
         )
         self.log("Training finished.")

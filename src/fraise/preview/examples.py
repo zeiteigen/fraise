@@ -25,8 +25,9 @@ def collect_examples(data, tokenizer, settings, count, *, first_source_only=Fals
             settings.packing_stride,
             pad_id,
             batch_size=settings.batch_size,
-            seed=settings.seed + epoch,
-            shuffle=settings.shuffle,
+            seed=settings.seed + epoch if settings.shuffle_per_epoch else settings.seed,
+            shuffle_per_epoch=settings.shuffle_per_epoch,
+            shuffle_data=settings.shuffle_data,
         ):
             for position, source in enumerate(batch.sources):
                 valid_targets = int(batch.target_mask[position].sum().item())

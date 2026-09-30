@@ -47,7 +47,7 @@ class TrainingDataMixTests(unittest.TestCase):
                             sum(int(block.target_mask.sum()) for block in blocks),
                         )
 
-    def test_absolute_counts_are_planned_across_epochs(self):
+    def test_source_counts_repeat_in_full_each_epoch(self):
         settings = tiny_settings(
             dataset_token_counts={"first": 5, "second": 1},
             max_train_tokens=6,
@@ -55,16 +55,16 @@ class TrainingDataMixTests(unittest.TestCase):
             sequence_length=4,
         )
         splits = {
-            name: Dataset.from_dict({"token_ids": [[1, 2, 3]]})
-            for name in ("first", "second")
+            "first": Dataset.from_dict({"token_ids": [[1, 2, 3, 4, 5, 6]]}),
+            "second": Dataset.from_dict({"token_ids": [[1, 2, 3]]}),
         }
         budgets = _plan_training_budgets(splits, settings)
         self.assertEqual(
             budgets,
             [
-                {"first": 2, "second": 1},
-                {"first": 2, "second": 0},
-                {"first": 1, "second": 0},
+                {"first": 5, "second": 1},
+                {"first": 5, "second": 1},
+                {"first": 5, "second": 1},
             ],
         )
         emitted = sum(
@@ -74,24 +74,34 @@ class TrainingDataMixTests(unittest.TestCase):
                 splits, budget, 4, 4, 0, batch_size=2
             )
         )
-        self.assertEqual(emitted, 6)
-        with self.assertRaisesRegex(ValueError, "'first' is assigned 5"):
-            _plan_training_budgets(
-                splits,
-                tiny_settings(
-                    dataset_token_counts={"first": 5, "second": 1},
-                    max_train_tokens=6,
-                    num_epochs=2,
-                    sequence_length=4,
-                ),
-            )
+        self.assertEqual(emitted, 18)
+
+    def test_more_epochs_do_not_relax_per_epoch_source_capacity(self):
+        splits = {
+            "first": Dataset.from_dict({"token_ids": [[1, 2, 3]]}),
+            "second": Dataset.from_dict({"token_ids": [[1, 2, 3]]}),
+        }
+        for num_epochs in (1, 3, 10):
+            with (
+                self.subTest(num_epochs=num_epochs),
+                self.assertRaisesRegex(ValueError, "'first' is assigned 5"),
+            ):
+                _plan_training_budgets(
+                    splits,
+                    tiny_settings(
+                        dataset_token_counts={"first": 5, "second": 1},
+                        max_train_tokens=6,
+                        num_epochs=num_epochs,
+                        sequence_length=4,
+                    ),
+                )
 
     def test_resume_cursor_preserves_batches_and_source_order(self):
         splits = {
             "first": Dataset.from_dict({"token_ids": [[1, 2, 3, 4, 5, 6]]}),
             "second": Dataset.from_dict({"token_ids": [[2, 3, 4, 5]]}),
         }
-        kwargs = dict(batch_size=2, seed=3, shuffle=True)
+        kwargs = {"batch_size": 2, "seed": 3, "shuffle_per_epoch": True}
         all_batches = list(
             iter_dataset_packed_batches(
                 splits, {"first": 5, "second": 3}, 2, 2, 0, **kwargs

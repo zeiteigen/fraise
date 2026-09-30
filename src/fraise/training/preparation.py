@@ -54,7 +54,7 @@ def prepare_data(
             tokenization_batch_size=settings.tokenization_batch_size,
             max_tokens=settings.max_validation_tokens,
         )
-        if data.validation is not None
+        if data.validation is not None and settings.max_validation_tokens != 0
         else None
     )
     return PreparedData(train, validation, budgets, steps)

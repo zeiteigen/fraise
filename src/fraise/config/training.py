@@ -19,14 +19,19 @@ class TrainingSettings:
     warmup_steps: int = 0
     sequence_length: int = 512
     packing_stride: int | None = None
-    max_validation_tokens: int | None = None
+    max_validation_tokens: int | None = 32768
+    validation_timeout_seconds: float = 300.0
+    validation_cpu_threads: int = 4
+    validation_device: str = "cpu"
     seed: int = 1337
     checkpoint_interval_steps: int = 1000
     checkpoint_keep_last: int = 2
     tokenization_batch_size: int = 1000
     use_bf16: bool = False
-    shuffle: bool = True
+    shuffle_per_epoch: bool = True
+    shuffle_data: bool = False
     gradient_clip_norm: float = 1.0
+    tied_weight_init_std: float = 0.02
 
     def __post_init__(self):
         if self.minibatch_size is None:
@@ -41,6 +46,7 @@ class TrainingSettings:
             "checkpoint_interval_steps",
             "checkpoint_keep_last",
             "tokenization_batch_size",
+            "validation_cpu_threads",
         ):
             integer(name, getattr(self, name))
         integer("sequence_length", self.sequence_length, 2)
@@ -48,7 +54,7 @@ class TrainingSettings:
         integer("warmup_steps", self.warmup_steps, 0)
         integer("seed", self.seed, 0)
         if self.max_validation_tokens is not None:
-            integer("max_validation_tokens", self.max_validation_tokens)
+            integer("max_validation_tokens", self.max_validation_tokens, 0)
         if self.batch_size % self.minibatch_size:
             raise ValueError("minibatch_size must divide batch_size")
         if self.packing_stride > self.sequence_length:
@@ -56,6 +62,10 @@ class TrainingSettings:
         number("learning_rate", self.learning_rate)
         number("weight_decay", self.weight_decay, inclusive=True)
         number("gradient_clip_norm", self.gradient_clip_norm)
+        number("tied_weight_init_std", self.tied_weight_init_std)
+        number("validation_timeout_seconds", self.validation_timeout_seconds)
+        if self.validation_device not in ("cpu", "npu"):
+            raise ValueError("validation_device must be 'cpu' or 'npu'")
         if not isinstance(self.betas, (list, tuple)) or len(self.betas) != 2:
             raise ValueError("betas must contain exactly two numbers")
         for beta in self.betas:
@@ -63,7 +73,7 @@ class TrainingSettings:
             if beta >= 1:
                 raise ValueError("betas must be in [0, 1)")
         object.__setattr__(self, "betas", tuple(self.betas))
-        for name in ("use_bf16", "shuffle"):
+        for name in ("use_bf16", "shuffle_per_epoch", "shuffle_data"):
             if type(getattr(self, name)) is not bool:
                 raise TypeError(f"{name} must be a bool")
         if (
@@ -86,8 +96,20 @@ class TrainingSettings:
         return self.batch_size // self.minibatch_size
 
     @classmethod
-    def from_dict(cls, values: dict) -> "TrainingSettings":
+    def from_dict(cls, values: dict) -> TrainingSettings:
         values = dict(values)
+        if "shuffle" in values:
+            legacy_shuffle = values.pop("shuffle")
+            if type(legacy_shuffle) is not bool:
+                raise TypeError("shuffle must be a bool")
+            if (
+                "shuffle_per_epoch" in values
+                and values["shuffle_per_epoch"] != legacy_shuffle
+            ):
+                raise ValueError(
+                    "shuffle and shuffle_per_epoch must agree when both are supplied"
+                )
+            values.setdefault("shuffle_per_epoch", legacy_shuffle)
         has_accumulation = "gradient_accumulation_steps" in values
         accumulation = values.pop("gradient_accumulation_steps", None)
         if has_accumulation:

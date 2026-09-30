@@ -58,7 +58,7 @@ def tiny_settings(**changes):
             "num_epochs": 1,
             "sequence_length": 2,
             "checkpoint_interval_steps": 1,
-            "shuffle": False,
+            "shuffle_per_epoch": False,
         }
         | changes
     )

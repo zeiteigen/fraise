@@ -40,7 +40,10 @@ def main(argv=None):
         if tokenizer.get_vocab_size() != config.vocab_size:
             raise ValueError("tokenizer/model vocabulary mismatch")
         data = load_training_data(
-            settings.dataset_token_counts, tokenizer, root=args.data_dir
+            settings.dataset_token_counts,
+            tokenizer,
+            root=args.data_dir,
+            validation=settings.max_validation_tokens != 0,
         )
         pretrain_transformer(
             tokenizer,

@@ -12,6 +12,24 @@ from fraise.model.model import FraiseModel
 
 
 class CommandTests(unittest.TestCase):
+    def test_training_cli_skips_held_out_loading_only_for_zero_budget(self):
+        with (
+            TemporaryDirectory() as directory,
+            patch.object(train, "SOURCE_NAMES", ("fixture",)),
+            patch.object(train, "load_training_data", return_value=tiny_data()) as load,
+            patch.object(train, "pretrain_transformer"),
+        ):
+            root = Path(directory)
+            arguments = self.write_inputs(root)
+            for budget, enabled in ((0, False), (123, True), (None, True)):
+                with self.subTest(budget=budget):
+                    write_json(
+                        root / "settings.json",
+                        asdict(tiny_settings(max_validation_tokens=budget)),
+                    )
+                    train.main(arguments + ["--model-name", "tiny"])
+                    self.assertIs(load.call_args.kwargs["validation"], enabled)
+
     def write_inputs(self, root):
         model, settings, tokenizer = (
             root / "model.json",

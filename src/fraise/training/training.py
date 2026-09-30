@@ -32,7 +32,13 @@ def pretrain_transformer(
         raise ValueError("tokenizer/model vocabulary mismatch")
     prepared = prepare_data(dataset, tokenizer, settings, model_config)
     pad_id = special_token_id(tokenizer, "<|pad|>")
-    runtime = build_runtime(model_config, settings, prepared.steps, device)
+    runtime = build_runtime(
+        model_config,
+        settings,
+        prepared.steps,
+        device,
+        initialize_weights=resume_from is None,
+    )
     manifest = run_manifest(dataset, tokenizer, model_config, settings, runtime.device)
     run = RunLifecycle(
         Path(save_path),
@@ -45,17 +51,22 @@ def pretrain_transformer(
         config_paths=config_paths,
     )
     state = run.checkpoints.restore(runtime.model, runtime.optimizer, runtime.scheduler)
+    total_train_tokens = settings.max_train_tokens * settings.num_epochs
     run.log(
-        f"Training {settings.max_train_tokens:,} targets from step {state.global_step}; "
+        f"Training {settings.max_train_tokens:,} targets per epoch for {settings.num_epochs} "
+        f"epochs ({total_train_tokens:,} total) from step {state.global_step}; "
         f"context {settings.sequence_length}, batch {settings.batch_size}, minibatch {settings.minibatch_size}, "
         f"accumulation {settings.gradient_accumulation_steps}, device {runtime.device}."
     )
     with ValidationRunner(
-        model_config, prepared.validation, settings, pad_id, run.log
+        model_config,
+        prepared.validation,
+        settings,
+        pad_id,
+        run.log,
+        on_update=run.record_validation,
     ) as validation:
         for epoch in range(state.epoch, settings.num_epochs):
-            if state.tokens_seen >= settings.max_train_tokens:
-                break
             epoch_targets = sum(prepared.budgets[epoch].values())
             runtime.model.train()
             batches = iter_dataset_packed_batches(
@@ -66,8 +77,11 @@ def pretrain_transformer(
                 pad_id,
                 batch_size=settings.batch_size,
                 start_batch_index=state.next_batch_index,
-                seed=settings.seed + epoch,
-                shuffle=settings.shuffle,
+                seed=settings.seed + epoch
+                if settings.shuffle_per_epoch
+                else settings.seed,
+                shuffle_per_epoch=settings.shuffle_per_epoch,
+                shuffle_data=settings.shuffle_data,
             )
             for batch_index, batch in prefetch_batches(
                 batches, pin_memory=runtime.device.type == "cuda"
@@ -84,22 +98,29 @@ def pretrain_transformer(
                         f"tokens {state.tokens_seen:,}, learning rate {runtime.scheduler.get_last_lr()[0]:.8g}"
                     )
                 validation.report()
-                if state.tokens_seen >= settings.max_train_tokens:
+                if state.epoch_valid_tokens >= epoch_targets:
                     break
             if state.optimizer_steps_in_epoch == 0:
                 raise RuntimeError(
                     f"epoch {epoch + 1} produced no valid training batches"
                 )
+            if state.epoch_valid_tokens != epoch_targets:
+                raise RuntimeError(
+                    f"epoch {epoch + 1} ended at {state.epoch_valid_tokens} / "
+                    f"{epoch_targets} target tokens"
+                )
             epoch_loss = state.epoch_loss_sum / state.epoch_valid_tokens
+            epoch_tokens = state.epoch_valid_tokens
             state.finish_epoch()
             run.checkpoint(runtime, state, validation)
             run.log(
                 f"Epoch {epoch + 1}/{settings.num_epochs}: loss {epoch_loss:.6f}, "
-                f"tokens {state.tokens_seen}/{settings.max_train_tokens}, latest validation {validation.latest}"
+                f"tokens {epoch_tokens}/{epoch_targets} this epoch, "
+                f"total {state.tokens_seen}/{total_train_tokens}, latest validation {validation.latest}"
             )
-        if state.tokens_seen < settings.max_train_tokens:
+        if state.tokens_seen != total_train_tokens:
             raise RuntimeError(
-                f"training ended at {state.tokens_seen} / {settings.max_train_tokens} target tokens"
+                f"training ended at {state.tokens_seen} / {total_train_tokens} target tokens"
             )
         # Ensure a resumed final-step checkpoint is validated in this session, too.
         if run.last_validation_step is None:

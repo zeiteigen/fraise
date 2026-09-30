@@ -64,9 +64,9 @@ def _validate_checkpoint(checkpoint, path) -> dict:
     return checkpoint
 
 
-def load_checkpoint_file(path: str | Path) -> dict:
+def load_checkpoint_file(path: str | Path, *, mmap: bool = False) -> dict:
     return _validate_checkpoint(
-        torch.load(path, map_location="cpu", weights_only=False), path
+        torch.load(path, map_location="cpu", weights_only=False, mmap=mmap), path
     )
 
 

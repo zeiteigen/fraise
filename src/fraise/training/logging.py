@@ -9,6 +9,6 @@ class RunLog:
         self.path = directory / "training.log"
 
     def __call__(self, message: str):
-        print(message)
+        print(message, flush=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(f"{datetime.now(timezone.utc).isoformat()} {message}\n")

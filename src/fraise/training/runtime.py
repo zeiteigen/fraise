@@ -39,14 +39,27 @@ class TrainingRuntime:
         return loss, tokens, norm
 
 
-def build_runtime(config, settings, steps, device: torch.device | None = None):
+def build_runtime(
+    config,
+    settings,
+    steps,
+    device: torch.device | None = None,
+    *,
+    initialize_weights=True,
+):
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     if settings.use_bf16:
         if device.type != "cuda" or not torch.cuda.is_bf16_supported():
             raise RuntimeError("use_bf16 requires a CUDA device with BF16 support")
         torch.set_float32_matmul_precision("high")
     seed_everything(settings.seed)
-    model = FraiseModel(config).to(device)
+    model = FraiseModel(config)
+    if initialize_weights and config.tie_word_embeddings:
+        # Unit-scale embeddings make the residual stream predict its own token.
+        torch.nn.init.normal_(
+            model.token_embedding.weight, std=settings.tied_weight_init_std
+        )
+    model.to(device)
     model.compile()
     optimizer = torch.optim.AdamW(
         model.parameters(),

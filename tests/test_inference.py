@@ -27,19 +27,25 @@ class InferenceTests(unittest.TestCase):
             original = pretrain_transformer(
                 tiny_tokenizer(),
                 tiny_data(),
-                tiny_settings(),
+                tiny_settings(tied_weight_init_std=0.1),
                 config,
                 directory,
                 "tiny",
                 device="cpu",
             )
             loaded = load_run(Path(directory) / "tiny", device="cpu")
+            archived = read_json(Path(directory) / "tiny" / "model_config.json")
+            self.assertNotIn("tied_weight_init_std", archived)
+            hyperparameters = read_json(
+                Path(directory) / "tiny" / "training_hyperparameters.json"
+            )
+            self.assertEqual(hyperparameters["tied_weight_init_std"], 0.1)
             self.assertIs(
                 loaded.model.token_embedding.weight, loaded.model.lm_head.weight
             )
             inputs = torch.tensor([[1, 3, 4]])
             torch.testing.assert_close(loaded.model(inputs), original(inputs))
-            text, ids = generate(
+            _text, ids = generate(
                 loaded.model, loaded.tokenizer, "a", temperature=1, max_new_tokens=2
             )
             self.assertLessEqual(len(ids), 4)
