@@ -49,7 +49,8 @@ def pretokenize_split(
         return Dataset.from_dict({TOKEN_IDS_COLUMN: []})
 
     columns = ["text"]
-    features = {TOKEN_IDS_COLUMN: List(Value("int64"))}
+    # int32 halves cache size and read bandwidth; windows widen to int64 on packing.
+    features = {TOKEN_IDS_COLUMN: List(Value("int32"))}
 
     def encoded_rows() -> Iterator[dict[str, object]]:
         selected_token_count = 0
@@ -99,7 +100,7 @@ def pretokenize_split(
     fingerprint = hashlib.sha256(
         repr(
             (
-                "pretokenize-v2",
+                "pretokenize-v3",
                 split._fingerprint,
                 max_tokens,
                 tokenizer_fingerprint(tokenizer),

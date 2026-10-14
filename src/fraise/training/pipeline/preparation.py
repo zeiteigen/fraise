@@ -6,7 +6,7 @@ from datasets import Dataset
 
 from fraise.data.types import TrainingData
 
-from .budgets import _plan_training_budgets, _planned_training_steps
+from .budgets import plan_training_budgets, planned_training_steps
 from .tokenization import pretokenize_split
 
 
@@ -18,9 +18,7 @@ class PreparedData:
     steps: int
 
 
-def prepare_data(
-    data: TrainingData, tokenizer, settings, model_config=None
-) -> PreparedData:
+def prepare_data(data: TrainingData, tokenizer, settings) -> PreparedData:
     active = {
         name for name, count in settings.dataset_token_counts.items() if count > 0
     }
@@ -28,8 +26,6 @@ def prepare_data(
         raise ValueError(
             "training sources do not match the positive dataset_token_counts"
         )
-    if model_config is not None and settings.sequence_length > model_config.max_seq_len:
-        raise ValueError("sequence_length cannot exceed model max_seq_len")
     train = {
         name: pretokenize_split(
             source,
@@ -39,8 +35,8 @@ def prepare_data(
         )
         for name, source in data.train.items()
     }
-    budgets = _plan_training_budgets(train, settings)
-    steps = _planned_training_steps(
+    budgets = plan_training_budgets(train, settings)
+    steps = planned_training_steps(
         budgets,
         sequence_length=settings.sequence_length,
         batch_size=settings.batch_size,

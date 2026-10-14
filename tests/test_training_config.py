@@ -68,8 +68,26 @@ class TrainingConfigTests(unittest.TestCase):
     def test_nonfinite_and_wrong_primitive_values_fail_at_ingestion(self):
         for changes in (
             {"learning_rate": float("nan")},
+            {"adamw_learning_rate": 0},
+            {"adamw_learning_rate": float("inf")},
+            {"adamw_learning_rate": True},
+            {"muon_momentum": -0.1},
+            {"muon_momentum": 1},
+            {"muon_momentum": float("nan")},
+            {"muon_momentum": True},
+            {"muon_nesterov": 1},
+            {"muon_ns_steps": 0},
+            {"muon_ns_steps": 1.5},
+            {"muon_ns_steps": True},
             {"weight_decay": -1},
             {"use_bf16": 1},
+            {"use_compile": 1},
+            {"deterministic": "true"},
+            {"compile_threads": 0},
+            {"compile_threads": True},
+            {"compile_threads": 1.5},
+            {"log_interval_steps": 0},
+            {"log_interval_steps": True},
             {"shuffle_per_epoch": "true"},
             {"shuffle_data": 1},
             {"betas": [0.9, 1]},
@@ -89,6 +107,41 @@ class TrainingConfigTests(unittest.TestCase):
                 self.assertRaises((ValueError, TypeError)),
             ):
                 tiny_settings(**changes)
+
+    def test_execution_and_reporting_settings_have_safe_defaults(self):
+        settings = tiny_settings()
+        self.assertTrue(settings.use_compile)
+        self.assertEqual(settings.compile_threads, 4)
+        self.assertFalse(settings.deterministic)
+        self.assertEqual(settings.log_interval_steps, 100)
+        settings = tiny_settings(
+            use_compile=False,
+            compile_threads=2,
+            deterministic=True,
+            log_interval_steps=10,
+        )
+        self.assertFalse(settings.use_compile)
+        self.assertEqual(settings.compile_threads, 2)
+        self.assertTrue(settings.deterministic)
+        self.assertEqual(settings.log_interval_steps, 10)
+
+    def test_muon_and_auxiliary_adamw_defaults_and_overrides(self):
+        settings = tiny_settings()
+        self.assertEqual(settings.adamw_learning_rate, 0.0003)
+        self.assertEqual(settings.muon_momentum, 0.95)
+        self.assertTrue(settings.muon_nesterov)
+        self.assertEqual(settings.muon_ns_steps, 5)
+        self.assertEqual(settings.betas, (0.9, 0.95))
+        settings = tiny_settings(
+            adamw_learning_rate=0.001,
+            muon_momentum=0,
+            muon_nesterov=False,
+            muon_ns_steps=3,
+        )
+        self.assertEqual(settings.adamw_learning_rate, 0.001)
+        self.assertEqual(settings.muon_momentum, 0)
+        self.assertFalse(settings.muon_nesterov)
+        self.assertEqual(settings.muon_ns_steps, 3)
 
     def test_validation_budget_is_loaded_from_hyperparameters_json(self):
         import json

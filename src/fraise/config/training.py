@@ -14,7 +14,11 @@ class TrainingSettings:
     max_train_tokens: int
     num_epochs: int
     minibatch_size: int | None = None
-    betas: tuple[float, float] = (0.9, 0.999)
+    adamw_learning_rate: float = 0.0003
+    muon_momentum: float = 0.95
+    muon_nesterov: bool = True
+    muon_ns_steps: int = 5
+    betas: tuple[float, float] = (0.9, 0.95)
     weight_decay: float = 0.0
     warmup_steps: int = 0
     sequence_length: int = 512
@@ -28,6 +32,10 @@ class TrainingSettings:
     checkpoint_keep_last: int = 2
     tokenization_batch_size: int = 1000
     use_bf16: bool = False
+    use_compile: bool = True
+    compile_threads: int = 4
+    deterministic: bool = False
+    log_interval_steps: int = 100
     shuffle_per_epoch: bool = True
     shuffle_data: bool = False
     gradient_clip_norm: float = 1.0
@@ -47,6 +55,9 @@ class TrainingSettings:
             "checkpoint_keep_last",
             "tokenization_batch_size",
             "validation_cpu_threads",
+            "muon_ns_steps",
+            "compile_threads",
+            "log_interval_steps",
         ):
             integer(name, getattr(self, name))
         integer("sequence_length", self.sequence_length, 2)
@@ -60,6 +71,10 @@ class TrainingSettings:
         if self.packing_stride > self.sequence_length:
             raise ValueError("packing_stride cannot exceed sequence_length")
         number("learning_rate", self.learning_rate)
+        number("adamw_learning_rate", self.adamw_learning_rate)
+        number("muon_momentum", self.muon_momentum, inclusive=True)
+        if self.muon_momentum >= 1:
+            raise ValueError("muon_momentum must be in [0, 1)")
         number("weight_decay", self.weight_decay, inclusive=True)
         number("gradient_clip_norm", self.gradient_clip_norm)
         number("tied_weight_init_std", self.tied_weight_init_std)
@@ -73,7 +88,14 @@ class TrainingSettings:
             if beta >= 1:
                 raise ValueError("betas must be in [0, 1)")
         object.__setattr__(self, "betas", tuple(self.betas))
-        for name in ("use_bf16", "shuffle_per_epoch", "shuffle_data"):
+        for name in (
+            "use_bf16",
+            "use_compile",
+            "deterministic",
+            "shuffle_per_epoch",
+            "shuffle_data",
+            "muon_nesterov",
+        ):
             if type(getattr(self, name)) is not bool:
                 raise TypeError(f"{name} must be a bool")
         if (

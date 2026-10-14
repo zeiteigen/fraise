@@ -67,3 +67,12 @@ def tiny_settings(**changes):
 def tiny_data(validation=False):
     source = Dataset.from_dict({"text": ["a b c d e"]})
     return TrainingData({"fixture": source}, source if validation else None)
+
+
+def eager_loss():
+    """Exercise compiled-mode training paths without invoking the compiler."""
+    from unittest.mock import patch
+
+    from fraise.training.batch import token_loss_sum
+
+    return patch("fraise.training.runtime.compile_loss_sum", lambda: token_loss_sum)

@@ -6,8 +6,8 @@ from fixtures import tiny_settings, tiny_tokenizer
 from fraise.data.types import TrainingData
 from fraise.preview.examples import collect_examples
 from fraise.preview.html import render_html
-from fraise.training.batches import iter_dataset_packed_batches
-from fraise.training.preparation import prepare_data
+from fraise.training.pipeline.batches import iter_dataset_packed_batches
+from fraise.training.pipeline.preparation import prepare_data
 
 
 class VisualizeTrainingDataTests(unittest.TestCase):

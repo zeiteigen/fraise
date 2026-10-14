@@ -2,8 +2,8 @@
 
 from fraise.config.values import integer
 from fraise.tokenizer.loading import special_token_id
-from fraise.training.batches import iter_dataset_packed_batches
-from fraise.training.preparation import prepare_data
+from fraise.training.pipeline.batches import iter_dataset_packed_batches
+from fraise.training.pipeline.preparation import prepare_data
 
 
 def collect_examples(data, tokenizer, settings, count, *, first_source_only=False):

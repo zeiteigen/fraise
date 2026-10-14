@@ -14,12 +14,37 @@ def prompt_ids(tokenizer, text):
 
 
 def logits_for_context(model, token_ids):
+    """Last-position logits for the most recent ``max_seq_len`` tokens."""
     device = next(model.parameters()).device
     inputs = torch.tensor(
         [token_ids[-model.max_seq_len :]], dtype=torch.long, device=device
     )
     with torch.inference_mode():
-        return model(inputs)[0, -1]
+        return model(inputs, last_only=True)[0, -1]
+
+
+class IncrementalDecoder:
+    """Next-token logits that reuse cached keys/values while the context fits.
+
+    Once the sequence exceeds ``max_seq_len`` the window slides and every
+    position changes, so it falls back to recomputing the visible window.
+    """
+
+    def __init__(self, model):
+        self.model = model
+        self.device = next(model.parameters()).device
+        self.cache = None
+
+    def logits(self, token_ids) -> torch.Tensor:
+        if len(token_ids) > self.model.max_seq_len:
+            self.cache = None
+            return logits_for_context(self.model, token_ids)
+        if self.cache is None:
+            self.cache = self.model.new_cache()
+        new = token_ids[len(self.cache) :]
+        inputs = torch.tensor([new], dtype=torch.long, device=self.device)
+        with torch.inference_mode():
+            return self.model(inputs, cache=self.cache, last_only=True)[0, -1]
 
 
 def sample_token(logits, temperature, top_k, top_p):
@@ -58,10 +83,9 @@ def generate(
             raise ValueError("top_p must be <= 1")
     ids = prompt_ids(tokenizer, prompt)
     eos = special_token_id(tokenizer, "<|eos|>")
+    decoder = IncrementalDecoder(model)
     for _ in range(max_new_tokens):
-        token_id = sample_token(
-            logits_for_context(model, ids), temperature, top_k, top_p
-        )
+        token_id = sample_token(decoder.logits(ids), temperature, top_k, top_p)
         ids.append(token_id)
         if token_id == eos:
             break

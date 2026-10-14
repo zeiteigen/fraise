@@ -1,9 +1,8 @@
 import math
 import unittest
-from unittest.mock import patch
 
 import torch
-from fixtures import tiny_config, tiny_settings
+from fixtures import eager_loss, tiny_config, tiny_settings
 
 from fraise.model.model import FraiseModel
 from fraise.training.runtime import build_runtime
@@ -11,7 +10,7 @@ from fraise.training.runtime import build_runtime
 
 class TrainingInitializationTests(unittest.TestCase):
     def setUp(self):
-        compile_patch = patch.object(FraiseModel, "compile", lambda self: None)
+        compile_patch = eager_loss()
         compile_patch.start()
         self.addCleanup(compile_patch.stop)
         rng_context = torch.random.fork_rng(devices=[])

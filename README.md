@@ -24,6 +24,9 @@ Select the sources explicitly. Streaming sources default to a 0.1 GB download
 cap each; BabyLM uses its complete pinned native text snapshot. Optionally cap
 text consumed during tokenizer training with `--max-bytes-per-source`. Limits
 keep complete documents and can exceed the requested size by one document.
+FineWeb's tokenizer text starts after the 0.05 GB prefix reserved for validation,
+so validation documents never shape the tokenizer's merges; `--source-size-gb`
+still measures the text available to the tokenizer.
 
 ```sh
 uv run create-tokenizer \
@@ -70,13 +73,19 @@ false; when true the embedding and output weights are shared and the output
 projection keeps its bias. `params MODEL_CONFIG.json` reports the corresponding
 parameter count.
 
-The checked-in `hyperparameters.json` provides the training configuration:
+The checked-in `hyperparameters.example.json` provides the training configuration:
 
 ```json
 {
   "batch_size": 64,
   "minibatch_size": 8,
-  "learning_rate": 0.0003,
+  "learning_rate": 0.02,
+  "adamw_learning_rate": 0.0003,
+  "muon_momentum": 0.95,
+  "muon_nesterov": true,
+  "muon_ns_steps": 5,
+  "betas": [0.9, 0.95],
+  "weight_decay": 0.01,
   "num_epochs": 1,
   "sequence_length": 512,
   "max_train_tokens": 250000000,
@@ -89,10 +98,14 @@ The checked-in `hyperparameters.json` provides the training configuration:
   "max_validation_tokens": 32768,
   "validation_timeout_seconds": 300,
   "validation_cpu_threads": 4,
-  "validation_device": "npu",
+  "validation_device": "cpu",
   "shuffle_per_epoch": false,
   "shuffle_data": false,
   "use_bf16": true,
+  "use_compile": true,
+  "compile_threads": 4,
+  "deterministic": false,
+  "log_interval_steps": 100,
   "tied_weight_init_std": 0.02
 }
 ```
@@ -115,17 +128,35 @@ minibatch size and then derived for reporting. Their product must equal
 `batch_size`. Gradients are weighted by valid targets, including padded tails.
 
 Other defaults are defined in `fraise.config.training.TrainingSettings`:
-`betas=[0.9,0.999]`, `weight_decay=0`, `warmup_steps=0`, `sequence_length=512`,
+`adamw_learning_rate=0.0003`, `muon_momentum=0.95`, `muon_nesterov=true`,
+`muon_ns_steps=5`, `betas=[0.9,0.95]`, `weight_decay=0`, `warmup_steps=0`, `sequence_length=512`,
 `packing_stride=sequence_length`, `seed=1337`, `checkpoint_interval_steps=1000`,
 `checkpoint_keep_last=2`, `tokenization_batch_size=1000`, `use_bf16=false`,
+`use_compile=true`, `compile_threads=4`, `deterministic=false`, `log_interval_steps=100`,
 `shuffle_per_epoch=true`, `shuffle_data=false`, `gradient_clip_norm=1`, `max_validation_tokens=32768`,
 `validation_timeout_seconds=300`, `validation_cpu_threads=4`, and
-`validation_device="cpu"`. The checked-in config selects `"npu"`. Set
+`validation_device="cpu"`. The checked-in config selects `"cpu"`. Set
 `max_validation_tokens` in `hyperparameters.json` to change the number of causal
 validation targets per checkpoint. Set it to `0` to disable validation: held-out
 data loading, tokenization, and CPU/NPU validation workers are skipped. `null`
 evaluates the complete held-out split; positive integers set a target limit.
 BF16 training requires a supporting CUDA device. CPU validation uses FP32.
+CPU validation is a good starting point for small models and validation budgets;
+NPU conversion and compilation are repeated for each checkpoint and can dominate
+short evaluations. Benchmark both backends for larger workloads. Increase
+`checkpoint_interval_steps` when validation queue waits dominate training.
+
+Training uses Muon for the transformer's hidden 2D matrices, with the
+`original` learning-rate scaling of PyTorch's Muon. The fused query/key/value
+projection is treated as three matrices: Q, K, and V are orthogonalized and
+learning-rate scaled separately, as if they were separate parameters. Same-shaped
+matrices are orthogonalized together in batched matmuls. Embeddings and output
+projection weights use AdamW with `weight_decay`; biases and normalization
+parameters use AdamW without weight decay. Shared embedding/output weights are
+updated once. `learning_rate` controls Muon; `adamw_learning_rate` and `betas`
+control AdamW. Both optimizers share the cosine schedule with `warmup_steps`. The example starts at Muon LR 0.02 and AdamW LR 0.0003,
+with weight decay 0.01, following the [Muon usage guidance](https://github.com/KellerJordan/Muon).
+Learning rate and weight decay still need tuning for the training run.
 
 `tied_weight_init_std` is a training hyperparameter that defaults to 0.02 and
 must be a finite positive number. For a fresh run with `tie_word_embeddings`
@@ -176,7 +207,41 @@ uv run --extra npu train \
   --model-name baseline-001
 ```
 
-Training uses `torch.compile`. `shuffle_per_epoch` shuffles passages within each
+`use_compile=true` compiles the forward pass and the masked token loss together
+as one fixed-shape graph; the module itself is not wrapped, so checkpoint keys are
+unchanged. Masked targets are ignored by the loss rather than gathered out, which
+avoids a device sync per minibatch. Compiled training pads short
+minibatches to `minibatch_size`, masking all added rows out of the loss and token
+counts. This keeps the model's input shape fixed through epoch tails. Set
+`use_compile=false` for small smoke tests where compilation costs more than it
+saves; eager execution keeps short minibatches at their original size.
+`compile_threads` controls TorchInductor's compiler pool (default four workers)
+and takes precedence over its environment-derived worker count for this run.
+Compiler pools are process-wide; use a fresh Python process when changing their size.
+The first compiled forward/backward warmup is timed and logged separately; it
+includes the first real minibatch execution, rather than an isolated compiler
+measurement.
+
+Non-deterministic CUDA runs use TF32 for FP32 matmuls
+(`float32_matmul_precision="high"`); the manifest records the precision in effect.
+
+`deterministic=true` enables strict Torch deterministic algorithms, forces the
+math attention backend and highest FP32 matmul precision, and disables cuDNN
+benchmarking during training and validation. It sets `CUBLAS_WORKSPACE_CONFIG`
+to `:4096:8` before initializing training CUDA when the variable is unset.
+Strict mode can cost throughput; it is intended for repeatable experiments and
+resume verification on the same hardware/software setup. Torch execution flags
+are restored after each step or evaluation, including on failure. The selected
+attention policy and execution settings are recorded in the run manifest.
+
+`log_interval_steps` controls progress reports independently of checkpointing.
+Reports include both optimizers' next learning rates, loss, gradient norm,
+tokens/second, validation queue wait time, and allocated/reserved/peak CUDA memory.
+Throughput excludes the initial compiled warmup and includes queue waits and
+checkpoint overhead. Epoch ends also report progress. The queue logs each
+backpressure wait and its running total.
+
+`shuffle_per_epoch` shuffles passages within each
 source with `seed + epoch`, preserving token order inside each passage.
 `shuffle_data` randomly interleaves packed windows across all active sources
 before batching, while preserving each source's exact token allocation. Mixing
@@ -240,9 +305,26 @@ The latest numerically ordered step checkpoint is used, or pass a checkpoint
 file explicitly. Resume compares model, training, dataset, and tokenizer identity.
 Python/Torch versions, execution device, and Git provenance are recorded
 separately, so environment changes alone do not invalidate continuation.
-Runs created with the older total-run token budget can resume unchanged when
-they have one epoch. Older multi-epoch runs require a fresh run: their saved
-learning-rate schedules do not cover the new per-epoch token allocations.
+Checkpoints restore both optimizers and their learning rates. The optimizer
+identity is `muon-adamw-v2` (separate Q/K/V orthogonalization and no decay on
+biases and normalization parameters). Runs started with AdamW or the earlier
+`muon-adamw` rules require a fresh run; their model weights remain loadable for
+inference and export.
+Operational settings may change on resume: `checkpoint_interval_steps`,
+`checkpoint_keep_last`, `compile_threads`, `log_interval_steps`,
+`tokenization_batch_size`, `validation_cpu_threads`, `validation_device`, and
+`validation_timeout_seconds`. Each resume records their values in its provenance.
+All other settings are compared after filling defaults for fields that older
+manifests lack. Changing `use_compile` or `deterministic` requires a fresh run
+because it can change training numerics. The run directory and resume identity
+are checked before tokenization or compilation begins.
+
+Resuming from a checkpoint older than the run's newest one starts a new
+continuation. The later checkpoints from the abandoned continuation are moved
+(never deleted) into `superseded-after-step-NNNNNNNN/` inside the run, so
+retention and directory resumes only see the live continuation.
+Resume also checks the token budget scope so saved learning-rate schedules
+match the configured per-epoch token allocations.
 
 Training retains the newest two checkpoints by default. Active and pending
 validation checkpoints remain protected until evaluation finishes. Every
@@ -264,6 +346,9 @@ Metadata records the latest validation result, failures, and the
 `validation_results` history during training, including attempt status and elapsed
 time. Resume preserves previous attempts. Checkpoints include optimizer,
 scheduler, counters, and RNG state; the final model contains weights.
+Checkpoints and weights load with `torch.load(weights_only=True)`, so no pickled
+code is executed. Schema-4 checkpoints store NumPy's RNG state as tensors; older
+schema-2/3 checkpoints load with an allowlist of the NumPy array types they contain.
 
 ```sh
 uv run checkpoint-to-model CHECKPOINT.pt OUTPUT.pt
@@ -272,7 +357,9 @@ uv run checkpoint-to-model CHECKPOINT.pt OUTPUT.pt
 Reusable inference functions live in `fraise.inference`. The notebooks in
 `notebooks/` call the same run loader, scoring, generation, and benchmark
 functions. Run loading preserves weight tying and the archived tokenizer.
-Generation uses full-context forward passes without a KV cache. Positive
+Generation and the benchmark decode with a key/value cache and project only
+the last position onto the vocabulary. Once a sequence exceeds `max_seq_len`, the
+context window slides and each step recomputes the visible window. Positive
 sampling temperatures work with the default nucleus sampler; optional top-k
 filtering can also be supplied.
 
@@ -287,9 +374,9 @@ uv run create-tokenizer --migrate-metadata
 ```
 
 Version-2 checkpoints and old final model weights load through a small key-name
-migration for the former embedding/output wrappers and SwiGLU spelling. To resume
-an old run, explicitly rebuild its manifest from its archived settings and the
-current source cache:
+migration for the former embedding/output wrappers and SwiGLU spelling. To update
+an old run's metadata, explicitly rebuild its manifest from its archived settings
+and the current source cache:
 
 ```sh
 uv run migrate-run data/models/OLD_RUN
@@ -299,6 +386,8 @@ This can download missing source prefixes. It records a new dataset identity,
 keeps the original manifest and `model_meta.v2.json`, and leaves checkpoint/model
 bytes untouched. Use the same source text as the original experiment; migration
 cannot prove that re-downloaded unpinned remote sources match a historical cache.
+Migration preserves the recorded AdamW optimizer identity and does not convert
+optimizer state to Muon.
 The old top-level Python import paths and redundant CLI aliases have been removed.
 
 ## Storage and development
@@ -306,11 +395,17 @@ The old top-level Python import paths and redundant CLI aliases have been remove
 Raw streaming downloads have request-specific directories under
 `DATA_DIR/raw/SOURCE/raw/`. Validation uses its own request cache and survives
 changes to training allocations. Arrow caches use local hard links when possible;
-source changes invalidate them. Tokenized prefixes are memory-mapped on disk and
-reused across epochs and resumes. Removing a cache causes it to be rebuilt.
+source changes invalidate them. Tokenized prefixes are memory-mapped int32 token
+caches on disk, reused across epochs and resumes; the first run after upgrading
+from int64 caches rebuilds them once. Packing reads Arrow buffers directly as NumPy
+arrays, and a resumed epoch jumps to its next window without re-packing earlier
+batches. Removing a cache causes it to be rebuilt.
 
 The package separates model components, configuration, source acquisition,
-tokenizer creation, training preparation, checkpoint storage, and inference.
+tokenizer creation, training, and inference. Within `fraise.training`,
+`pipeline/` tokenizes, packs, mixes, and batches data; `run/` owns run directories,
+checkpoints, manifests, and resumable state; and `validation/` runs the isolated
+checkpoint evaluator.
 Small modules own their concrete behavior; package initializers stay lightweight.
 
 ```sh

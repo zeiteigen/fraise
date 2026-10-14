@@ -3,8 +3,8 @@ from collections import Counter
 
 from datasets import Dataset
 
-from fraise.training.batches import iter_dataset_packed_batches
-from fraise.training.mixing import iter_mixed_source_blocks
+from fraise.training.pipeline.batches import iter_dataset_packed_batches
+from fraise.training.pipeline.mixing import iter_mixed_source_blocks
 
 
 def window_rows(batches):

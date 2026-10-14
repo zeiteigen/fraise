@@ -40,6 +40,27 @@ class DatasetSelectionTests(unittest.TestCase):
         self.assertIs(result.train["cosmopedia-khanacademy"], train)
         self.assertIs(result.validation, validation)
 
+    def test_tokenizer_sources_skip_the_fineweb_validation_prefix(self):
+        calls = {}
+
+        def fake_stream(source, directory, **kwargs):
+            calls[source.name] = kwargs
+            return TrainingData({source.name: Dataset.from_dict({"text": ["a"]})})
+
+        with (
+            TemporaryDirectory() as root,
+            patch.object(loading, "load_stream", side_effect=fake_stream),
+        ):
+            loading.load_tokenizer_sources(
+                ["fineweb-edu", "cosmopedia-stories"], root=Path(root), size_gb=0.1
+            )
+        fineweb = calls["fineweb-edu"]
+        self.assertEqual(fineweb["validation_size_gb"], loading.VALIDATION_SIZE_GB)
+        self.assertFalse(fineweb["include_validation"])
+        self.assertAlmostEqual(fineweb["size_gb"], 0.1 + loading.VALIDATION_SIZE_GB)
+        self.assertEqual(calls["cosmopedia-stories"]["validation_size_gb"], 0)
+        self.assertEqual(calls["cosmopedia-stories"]["size_gb"], 0.1)
+
     def test_preview_skips_validation_loading(self):
         counts = {"babylm": 4}
         with (

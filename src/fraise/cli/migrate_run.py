@@ -7,7 +7,7 @@ from fraise.config.training import TrainingSettings
 from fraise.data.loading import load_training_data
 from fraise.io import read_json
 from fraise.tokenizer.loading import load_tokenizer
-from fraise.training.migration import migrate_run
+from fraise.training.run.migration import migrate_run
 
 from .common import add_data_dir, cli_errors
 

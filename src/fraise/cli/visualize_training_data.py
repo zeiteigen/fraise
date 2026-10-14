@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from fraise.config import load_model_config, load_training_settings
+from fraise.config.compatibility import check_compatibility
 from fraise.data.loading import load_training_data
 from fraise.data.sources import SOURCE_NAMES
 from fraise.preview.examples import collect_examples
@@ -30,11 +31,8 @@ def main(argv=None):
         settings = load_training_settings(args.training_hyperparameters)
         config = load_model_config(args.model_config)
         settings.validate_sources(SOURCE_NAMES)
-        if settings.sequence_length > config.max_seq_len:
-            raise ValueError("sequence_length cannot exceed model max_seq_len")
         tokenizer = load_tokenizer(args.tokenizer_file)
-        if tokenizer.get_vocab_size() != config.vocab_size:
-            raise ValueError("tokenizer/model vocabulary mismatch")
+        check_compatibility(tokenizer, config, settings)
         selected = None
         if args.first_source_only:
             first = next(

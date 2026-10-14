@@ -24,8 +24,15 @@ def capture_rng_state() -> dict[str, object]:
     if torch.cuda.is_available():
         state["cuda"] = torch.cuda.get_rng_state_all()
 
-    state["numpy"] = np.random.get_state()
-
+    algorithm, keys, position, has_gauss, cached_gaussian = np.random.get_state()
+    # Plain tensors and numbers keep checkpoints loadable with weights_only=True.
+    state["numpy"] = {
+        "algorithm": algorithm,
+        "keys": torch.from_numpy(keys.astype(np.int64)),
+        "position": int(position),
+        "has_gauss": int(has_gauss),
+        "cached_gaussian": float(cached_gaussian),
+    }
     return state
 
 
@@ -33,6 +40,15 @@ def restore_rng_state(state: Mapping[str, object]) -> None:
     """Restore the RNG payload validated by the checkpoint reader."""
     random.setstate(state["python"])
     torch.set_rng_state(state["torch"])
-    np.random.set_state(state["numpy"])
+    numpy_state = state["numpy"]
+    if isinstance(numpy_state, Mapping):
+        numpy_state = (
+            numpy_state["algorithm"],
+            numpy_state["keys"].numpy().astype(np.uint32),
+            numpy_state["position"],
+            numpy_state["has_gauss"],
+            numpy_state["cached_gaussian"],
+        )
+    np.random.set_state(numpy_state)
     if torch.cuda.is_available() and "cuda" in state:
         torch.cuda.set_rng_state_all(state["cuda"])

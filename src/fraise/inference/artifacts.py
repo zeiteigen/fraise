@@ -10,8 +10,8 @@ from fraise.config.model import ModelConfig
 from fraise.io import read_json
 from fraise.model.model import FraiseModel
 from fraise.tokenizer.loading import load_tokenizer, tokenizer_fingerprint
-from fraise.training.artifacts import META_FILE_NAME, resolve_checkpoint
-from fraise.training.checkpoints import load_model_weights
+from fraise.training.run.artifacts import META_FILE_NAME, resolve_checkpoint
+from fraise.training.run.checkpoints import load_model_weights
 
 
 @dataclass

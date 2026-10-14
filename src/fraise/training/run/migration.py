@@ -41,6 +41,7 @@ def migrate_run(directory: Path, data):
     metadata["manifest"]["identity"]["token_budget_scope"] = old.get(
         "token_budget_scope", "total"
     )
+    metadata["manifest"]["identity"]["optimizer"] = "adamw"
     metadata["schema_version"] = 3
     messages = metadata.pop("all_messages", [])
     if messages:

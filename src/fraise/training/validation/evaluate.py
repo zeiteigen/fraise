@@ -4,9 +4,10 @@ from time import monotonic
 
 import torch
 
-from .batch import autocast_context, loss_for_batch
-from .batches import iter_dataset_packed_batches
-from .packing import packed_target_capacity
+from ..batch import autocast_context, loss_for_batch
+from ..execution import deterministic_execution
+from ..pipeline.batches import iter_dataset_packed_batches
+from ..pipeline.packing import packed_target_capacity
 
 
 def evaluate(model, split, settings, pad_token_id, *, progress=None):
@@ -28,7 +29,10 @@ def evaluate(model, split, settings, pad_token_id, *, progress=None):
         progress(f"Evaluating {budget:,} validation targets.")
     model.eval()
     try:
-        with torch.inference_mode():
+        with (
+            deterministic_execution(settings.deterministic),
+            torch.inference_mode(),
+        ):
             for _, batch in iter_dataset_packed_batches(
                 {"validation": split},
                 {"validation": budget},

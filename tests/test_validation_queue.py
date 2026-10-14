@@ -2,10 +2,36 @@ import unittest
 from concurrent.futures import Future
 from pathlib import Path
 
-from fraise.training.validation_queue import ValidationQueue
+from fraise.training.validation.queue import ValidationQueue
 
 
 class ValidationQueueTests(unittest.TestCase):
+    def test_backpressure_wait_is_timed_and_logged(self):
+        from unittest.mock import patch
+
+        clock = [10.0]
+
+        class DelayedFuture(Future):
+            def result(self, timeout=None):
+                clock[0] += 1.25
+                self.set_result(0.5)
+                return super().result(timeout)
+
+        messages = []
+        queue = ValidationQueue(
+            lambda step, path: DelayedFuture() if step == 1 else Future(),
+            messages.append,
+        )
+        with patch(
+            "fraise.training.validation.queue.monotonic", side_effect=lambda: clock[0]
+        ):
+            for step in (1, 2, 3):
+                queue.queue(step, Path(f"step-{step}.pt"))
+        self.assertEqual(queue.wait_seconds, 1.25)
+        self.assertTrue(
+            any("Validation queue wait: 1.250s" in text for text in messages)
+        )
+
     def test_every_checkpoint_is_evaluated_with_bounded_backpressure(self):
         from threading import Timer
 
@@ -39,15 +65,17 @@ class ValidationQueueTests(unittest.TestCase):
         self.assertEqual(queue.protected_paths(), set())
 
     def test_timeout_releases_checkpoint_and_starts_waiting_job(self):
-        from unittest.mock import patch
+        from fraise.training.validation.deadline import timed_future
 
-        submitted = []
-        resets = []
+        submitted, resets, killed = [], [], []
 
         def submit(step, path):
             future = Future()
+            if step == 2:
+                future.set_result(0.5)
             submitted.append(future)
-            return future
+            timeout = 0.05 if step == 1 else 60
+            return timed_future(future, timeout, lambda: killed.append(step))
 
         queue = ValidationQueue(
             submit,
@@ -55,17 +83,16 @@ class ValidationQueueTests(unittest.TestCase):
             timeout_seconds=5,
             reset=lambda: resets.append(True),
         )
-        with patch("fraise.training.validation_queue.monotonic", return_value=0):
-            queue.queue(1, Path("first.pt"))
-            queue.queue(2, Path("second.pt"))
-        with patch("fraise.training.validation_queue.monotonic", return_value=6):
-            queue.report()
+        queue.queue(1, Path("first.pt"))
+        queue.queue(2, Path("second.pt"))
+        queue.report()
+        self.assertEqual(queue.results, [])
+        queue.report(wait=True)
+        self.assertEqual(killed, [1])
         self.assertEqual(resets, [True])
         self.assertEqual(queue.results[0]["status"], "timed out")
-        self.assertEqual(queue.protected_paths(), {Path("second.pt")})
-        submitted[1].set_result(0.5)
-        queue.report(wait=True)
         self.assertEqual(queue.latest, (2, 0.5))
+        self.assertEqual(queue.protected_paths(), set())
 
     def test_cancel_records_both_active_and_waiting_checkpoints(self):
         queue = ValidationQueue(lambda step, path: Future(), lambda message: None)

@@ -41,6 +41,20 @@ class RunLifecycle:
             self.artifacts.metadata.get("validation_failures", [])
         )
 
+    def restore(self, runtime):
+        state = self.checkpoints.restore(
+            runtime.model, runtime.optimizer, runtime.scheduler
+        )
+        if self.checkpoints.latest is not None:
+            superseded = self.checkpoints.supersede_after(state.global_step)
+            if superseded is not None:
+                target, paths = superseded
+                self.log(
+                    f"Resuming from step {state.global_step}: moved {len(paths)} later "
+                    f"checkpoint(s) from the abandoned continuation to {target.name}/."
+                )
+        return state
+
     def record_validation(self, *, validation, validation_failures, validation_results):
         self.artifacts.update(
             validation=validation or self.artifacts.metadata.get("validation"),

@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from fraise.training.checkpoints import checkpoint_to_model
+from fraise.training.run.checkpoints import checkpoint_to_model
 
 from .common import cli_errors
 

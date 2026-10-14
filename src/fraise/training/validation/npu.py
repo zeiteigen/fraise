@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .validation_npu_runtime import load_local_npu_runtime
+from .npu_runtime import load_local_npu_runtime
 
 
 class OpenVinoNpuModel(nn.Module):

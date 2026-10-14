@@ -10,8 +10,8 @@ from datasets import Dataset
 from fraise.config.training import TrainingSettings
 from fraise.model.model import FraiseModel
 
-from .checkpoints import load_checkpoint_file
-from .validation import evaluate
+from ..run.checkpoints import load_checkpoint_file
+from .evaluate import evaluate
 from .worker_lifetime import exit_with_parent
 
 
@@ -31,7 +31,7 @@ class CheckpointValidator:
         model = self.model
         settings = self.settings
         if settings.validation_device == "npu":
-            from .validation_npu import OpenVinoNpuModel
+            from .npu import OpenVinoNpuModel
 
             model = OpenVinoNpuModel(model, settings.sequence_length, progress=progress)
             settings = replace(settings, minibatch_size=1)

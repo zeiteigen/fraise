@@ -74,6 +74,48 @@ class StreamTests(unittest.TestCase):
                 first.validation._fingerprint, second.validation._fingerprint
             )
 
+    def test_batched_token_counting_selects_the_same_rows_as_per_row_counting(self):
+        import random
+
+        tokenizer = tiny_tokenizer()
+        generator = random.Random(4)
+        texts = [
+            " ".join(generator.choices("abcde", k=generator.randrange(0, 5)))
+            for _ in range(60)
+        ]
+        for target in (1, 7, 40, 10_000):
+            expected, tokens = [], 0
+            for text in texts:
+                expected.append(text)
+                tokens += len(tokenizer.encode(text).ids) if text else 0
+                if tokens >= target:
+                    break
+            for batch_size in (1, 3, 256):
+                with self.subTest(target=target, batch_size=batch_size):
+                    counter = stream._TrainTokenCounter(tokenizer, target, batch_size)
+                    selected = []
+                    for text in texts:
+                        if counter.add(text):
+                            selected += counter.flush()
+                            if counter.reached:
+                                break
+                    selected += counter.flush()
+                    self.assertEqual(selected, expected)
+
+    def test_training_only_load_skips_the_held_out_prefix(self):
+        with TemporaryDirectory() as directory:
+            rows = [{"text": "abc"}, {"text": "def"}, {"text": "ghi"}]
+            with patch.object(stream, "stream_source", return_value=iter(rows)):
+                result = stream.load_stream(
+                    self.source,
+                    Path(directory),
+                    size_gb=9e-9,
+                    validation_size_gb=3e-9,
+                    include_validation=False,
+                )
+        self.assertIsNone(result.validation)
+        self.assertEqual(result.train["fixture"]["text"], ["def", "ghi"])
+
     def test_changed_raw_file_invalidates_arrow_without_remote_download(self):
         with TemporaryDirectory() as directory:
             directory = Path(directory)

@@ -29,28 +29,17 @@ class RotaryEmbedding(nn.Module):
         *,
         device: torch.device,
         dtype: torch.dtype,
-    ):
+        offset: int = 0,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Tables for absolute positions ``offset .. offset + seq_len - 1``."""
         compute_dtype = torch.float64 if dtype == torch.float64 else torch.float32
-
         positions = torch.arange(
-            seq_len,
-            device=device,
-            dtype=compute_dtype,
+            offset, offset + seq_len, device=device, dtype=compute_dtype
         )
-        indices = self.frequency_indices.to(
-            device=device,
-            dtype=compute_dtype,
-        )
-
+        indices = self.frequency_indices.to(device=device, dtype=compute_dtype)
         inv_freq = torch.exp(-indices * (math.log(10_000.0) / self.dim))
         angles = positions[:, None] * inv_freq[None, :]
-        cos = angles.cos()[None, None, :, :]
-        sin = angles.sin()[None, None, :, :]
-
-        return (
-            cos,
-            sin,
-        )
+        return angles.cos()[None, None, :, :], angles.sin()[None, None, :, :]
 
     def apply_rotary_qk(
         self,
@@ -58,11 +47,8 @@ class RotaryEmbedding(nn.Module):
         k: torch.Tensor,
         cos: torch.Tensor,
         sin: torch.Tensor,
-    ):
-        return (
-            self._apply_rotary(q, cos, sin),
-            self._apply_rotary(k, cos, sin),
-        )
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._apply_rotary(q, cos, sin), self._apply_rotary(k, cos, sin)
 
     def _apply_rotary(
         self,
@@ -71,20 +57,7 @@ class RotaryEmbedding(nn.Module):
         sin: torch.Tensor,
     ) -> torch.Tensor:
         original_dtype = x.dtype
-
-        x = x.to(cos.dtype).reshape(
-            *x.shape[:-1],
-            self.dim // 2,
-            2,
-        )
-        even = x[..., 0]
-        odd = x[..., 1]
-
-        x = torch.stack(
-            (
-                even * cos - odd * sin,
-                even * sin + odd * cos,
-            ),
-            dim=-1,
-        )
+        x = x.to(cos.dtype).reshape(*x.shape[:-1], self.dim // 2, 2)
+        even, odd = x[..., 0], x[..., 1]
+        x = torch.stack((even * cos - odd * sin, even * sin + odd * cos), dim=-1)
         return x.flatten(-2).to(original_dtype)

@@ -1,7 +1,7 @@
 """Coordinate checkpoint validation, durable outcomes, and process cleanup."""
 
-from .validation_process import ValidationProcess
-from .validation_queue import ValidationQueue
+from .process import ValidationProcess
+from .queue import ValidationQueue
 
 
 class ValidationRunner:
@@ -58,6 +58,10 @@ class ValidationRunner:
         if self.queue is not None:
             self.queue.report(wait=wait)
             self._persist()
+
+    @property
+    def queue_wait_seconds(self):
+        return self.queue.wait_seconds if self.queue is not None else 0.0
 
     @property
     def protected_paths(self):

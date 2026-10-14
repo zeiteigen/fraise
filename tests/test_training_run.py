@@ -4,10 +4,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import torch
-from fixtures import tiny_config, tiny_data, tiny_settings, tiny_tokenizer
+from fixtures import eager_loss, tiny_config, tiny_data, tiny_settings, tiny_tokenizer
 
 from fraise.io import read_json
-from fraise.model.model import FraiseModel
 from fraise.training.training import pretrain_transformer
 
 
@@ -24,8 +23,8 @@ class TrainingRunTests(unittest.TestCase):
             with (
                 self.subTest(backend=backend),
                 TemporaryDirectory() as directory,
-                patch.object(FraiseModel, "compile", lambda self: None),
-                patch("fraise.training.validation_runner.ValidationProcess") as worker,
+                eager_loss(),
+                patch("fraise.training.validation.runner.ValidationProcess") as worker,
             ):
                 pretrain_transformer(
                     tiny_tokenizer(),
@@ -65,7 +64,7 @@ class TrainingRunTests(unittest.TestCase):
         )
         with (
             TemporaryDirectory() as directory,
-            patch.object(FraiseModel, "compile", lambda self: None),
+            eager_loss(),
         ):
             pretrain_transformer(
                 tiny_tokenizer(),
@@ -99,7 +98,7 @@ class TrainingRunTests(unittest.TestCase):
     def test_small_run_retains_latest_checkpoint_and_archives_inputs(self):
         with (
             TemporaryDirectory() as directory,
-            patch.object(FraiseModel, "compile", lambda self: None),
+            eager_loss(),
         ):
             pretrain_transformer(
                 tiny_tokenizer(),
@@ -131,7 +130,7 @@ class TrainingRunTests(unittest.TestCase):
         settings = tiny_settings(checkpoint_keep_last=2)
         with (
             TemporaryDirectory() as directory,
-            patch.object(FraiseModel, "compile", lambda self: None),
+            eager_loss(),
         ):
             original = pretrain_transformer(
                 tiny_tokenizer(),
@@ -151,7 +150,7 @@ class TrainingRunTests(unittest.TestCase):
                 tiny_config(),
                 directory,
                 "tiny",
-                checkpoint,
+                resume_from=checkpoint,
                 device="cpu",
             )
             for name, weights in original.state_dict().items():
@@ -165,7 +164,7 @@ class TrainingRunTests(unittest.TestCase):
     def test_separate_cpu_validation_completes_and_is_recorded(self):
         with (
             TemporaryDirectory() as directory,
-            patch.object(FraiseModel, "compile", lambda self: None),
+            eager_loss(),
         ):
             pretrain_transformer(
                 tiny_tokenizer(),
@@ -201,7 +200,7 @@ class TrainingRunTests(unittest.TestCase):
                 self.assertIn(message, log)
 
     def test_validation_outcomes_are_durable_before_finish_and_survive_resume(self):
-        from fraise.training.artifacts import RunArtifacts
+        from fraise.training.run.artifacts import RunArtifacts
 
         original_finish = RunArtifacts.finish
         snapshots = []
@@ -212,7 +211,7 @@ class TrainingRunTests(unittest.TestCase):
 
         with (
             TemporaryDirectory() as directory,
-            patch.object(FraiseModel, "compile", lambda self: None),
+            eager_loss(),
             patch.object(RunArtifacts, "finish", inspect_finish),
         ):
             settings = tiny_settings(max_validation_tokens=4)
@@ -233,7 +232,7 @@ class TrainingRunTests(unittest.TestCase):
                 tiny_config(),
                 directory,
                 "tiny",
-                checkpoint,
+                resume_from=checkpoint,
                 device="cpu",
             )
             self.assertEqual([record["step"] for record in snapshots[0]], [1, 2])
@@ -262,7 +261,7 @@ class TrainingRunTests(unittest.TestCase):
         )
         with (
             TemporaryDirectory() as directory,
-            patch.object(FraiseModel, "compile", lambda self: None),
+            eager_loss(),
         ):
             expected = pretrain_transformer(
                 tiny_tokenizer(),
@@ -289,10 +288,106 @@ class TrainingRunTests(unittest.TestCase):
                     tiny_config(),
                     directory,
                     "tiny",
-                    checkpoint,
+                    resume_from=checkpoint,
                     device="cpu",
                 )
                 for name, weights in expected.state_dict().items():
                     torch.testing.assert_close(
                         resumed.state_dict()[name], weights, rtol=0, atol=0
                     )
+
+    def test_run_destination_errors_precede_data_preparation(self):
+        with TemporaryDirectory() as directory:
+            (Path(directory) / "tiny").mkdir()
+            (Path(directory) / "tiny" / "notes.txt").write_text("keep")
+            with (
+                patch("fraise.training.training.prepare_data") as prepare,
+                self.assertRaisesRegex(FileExistsError, "not empty"),
+            ):
+                pretrain_transformer(
+                    tiny_tokenizer(),
+                    tiny_data(),
+                    tiny_settings(),
+                    tiny_config(),
+                    directory,
+                    "tiny",
+                    device="cpu",
+                )
+            prepare.assert_not_called()
+
+    def test_resume_identity_errors_precede_data_preparation(self):
+        with (
+            TemporaryDirectory() as directory,
+            eager_loss(),
+        ):
+            pretrain_transformer(
+                tiny_tokenizer(),
+                tiny_data(),
+                tiny_settings(),
+                tiny_config(),
+                directory,
+                "tiny",
+                device="cpu",
+            )
+            with (
+                patch("fraise.training.training.prepare_data") as prepare,
+                self.assertRaisesRegex(ValueError, "resume training does not match"),
+            ):
+                pretrain_transformer(
+                    tiny_tokenizer(),
+                    tiny_data(),
+                    tiny_settings(learning_rate=2e-3),
+                    tiny_config(),
+                    directory,
+                    "tiny",
+                    resume_from=Path(directory) / "tiny",
+                    device="cpu",
+                )
+            prepare.assert_not_called()
+
+    def test_resuming_an_older_checkpoint_moves_the_abandoned_continuation(self):
+        settings = tiny_settings(
+            dataset_token_counts={"fixture": 6},
+            max_train_tokens=6,
+            checkpoint_keep_last=2,
+        )
+        with (
+            TemporaryDirectory() as directory,
+            eager_loss(),
+        ):
+            run = Path(directory) / "tiny"
+            pretrain_transformer(
+                tiny_tokenizer(),
+                tiny_data(),
+                settings,
+                tiny_config(),
+                directory,
+                "tiny",
+                device="cpu",
+            )
+            self.assertEqual(
+                sorted(path.name for path in run.glob("checkpoint_step_*.pt")),
+                ["checkpoint_step_00000002.pt", "checkpoint_step_00000003.pt"],
+            )
+            pretrain_transformer(
+                tiny_tokenizer(),
+                tiny_data(),
+                settings,
+                tiny_config(),
+                directory,
+                "tiny",
+                resume_from=run / "checkpoint_step_00000002.pt",
+                device="cpu",
+            )
+            superseded = run / "superseded-after-step-00000002"
+            self.assertEqual(
+                [path.name for path in superseded.iterdir()],
+                ["checkpoint_step_00000003.pt"],
+            )
+            self.assertEqual(
+                sorted(path.name for path in run.glob("checkpoint_step_*.pt")),
+                ["checkpoint_step_00000002.pt", "checkpoint_step_00000003.pt"],
+            )
+            self.assertIn(
+                "moved 1 later checkpoint(s)", (run / "training.log").read_text()
+            )

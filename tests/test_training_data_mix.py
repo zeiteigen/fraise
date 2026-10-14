@@ -3,10 +3,13 @@ import unittest
 from datasets import Dataset
 from fixtures import tiny_settings, tiny_tokenizer
 
-from fraise.training.batches import iter_dataset_packed_batches
-from fraise.training.budgets import _plan_training_budgets, _planned_training_steps
-from fraise.training.packing import iter_packed_blocks, packed_target_capacity
-from fraise.training.tokenization import pretokenize_split
+from fraise.training.pipeline.batches import iter_dataset_packed_batches
+from fraise.training.pipeline.budgets import (
+    plan_training_budgets,
+    planned_training_steps,
+)
+from fraise.training.pipeline.packing import iter_packed_blocks, packed_target_capacity
+from fraise.training.pipeline.tokenization import pretokenize_split
 
 
 class TrainingDataMixTests(unittest.TestCase):
@@ -58,7 +61,7 @@ class TrainingDataMixTests(unittest.TestCase):
             "first": Dataset.from_dict({"token_ids": [[1, 2, 3, 4, 5, 6]]}),
             "second": Dataset.from_dict({"token_ids": [[1, 2, 3]]}),
         }
-        budgets = _plan_training_budgets(splits, settings)
+        budgets = plan_training_budgets(splits, settings)
         self.assertEqual(
             budgets,
             [
@@ -86,7 +89,7 @@ class TrainingDataMixTests(unittest.TestCase):
                 self.subTest(num_epochs=num_epochs),
                 self.assertRaisesRegex(ValueError, "'first' is assigned 5"),
             ):
-                _plan_training_budgets(
+                plan_training_budgets(
                     splits,
                     tiny_settings(
                         dataset_token_counts={"first": 5, "second": 1},
@@ -127,13 +130,11 @@ class TrainingDataMixTests(unittest.TestCase):
 
     def test_scheduler_counts_partial_source_and_epoch_batches(self):
         self.assertEqual(
-            _planned_training_steps(
-                [{"first": 1}] * 4, sequence_length=4, batch_size=8
-            ),
+            planned_training_steps([{"first": 1}] * 4, sequence_length=4, batch_size=8),
             4,
         )
         self.assertEqual(
-            _planned_training_steps(
+            planned_training_steps(
                 [{"first": 5, "second": 3}], sequence_length=4, batch_size=2
             ),
             2,
@@ -141,7 +142,7 @@ class TrainingDataMixTests(unittest.TestCase):
 
     def test_zero_budget_sources_need_no_split(self):
         settings = tiny_settings(dataset_token_counts={"fixture": 4, "unused": 0})
-        budgets = _plan_training_budgets(
+        budgets = plan_training_budgets(
             {"fixture": Dataset.from_dict({"token_ids": [[1, 2, 3, 4, 5]]})}, settings
         )
         self.assertEqual(budgets, [{"fixture": 4, "unused": 0}])

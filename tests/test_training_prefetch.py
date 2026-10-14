@@ -3,8 +3,8 @@ from threading import Event
 
 import torch
 
-from fraise.training.batch_types import PackedTokenBatch
-from fraise.training.prefetch import prefetch_batches
+from fraise.training.pipeline.batch_types import PackedTokenBatch
+from fraise.training.pipeline.prefetch import prefetch_batches
 
 
 class TrainingPrefetchTests(unittest.TestCase):

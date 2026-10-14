@@ -1,6 +1,12 @@
 {
   "batch_size": 64,
-  "learning_rate": 0.0003,
+  "learning_rate": 0.02,
+  "adamw_learning_rate": 0.0003,
+  "muon_momentum": 0.95,
+  "muon_nesterov": true,
+  "muon_ns_steps": 5,
+  "betas": [0.9, 0.95],
+  "weight_decay": 0.01,
   "num_epochs": 100,
   "sequence_length": 512,
   "max_train_tokens": 524288,
@@ -13,9 +19,13 @@
   "max_validation_tokens": 0,
   "validation_timeout_seconds": 300,
   "validation_cpu_threads": 4,
-  "validation_device": "npu",
+  "validation_device": "cpu",
   "shuffle_per_epoch": true,
   "shuffle_data": false,
   "use_bf16": true,
+  "use_compile": true,
+  "compile_threads": 4,
+  "deterministic": false,
+  "log_interval_steps": 100,
   "tied_weight_init_std": 0.02
 }

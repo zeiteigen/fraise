@@ -5,8 +5,8 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from threading import Event, Thread
 
-from .validation_deadline import timed_future
-from .validation_worker import evaluate_checkpoint, init_validation_worker
+from .deadline import timed_future
+from .worker import evaluate_checkpoint, init_validation_worker
 
 
 class ValidationProcess:

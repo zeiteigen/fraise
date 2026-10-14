@@ -4,11 +4,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from fixtures import tiny_config, tiny_data, tiny_settings, tiny_tokenizer
+from fixtures import eager_loss, tiny_config, tiny_data, tiny_settings, tiny_tokenizer
 
 from fraise.cli import train, visualize_training_data
 from fraise.io import write_json
-from fraise.model.model import FraiseModel
 
 
 class CommandTests(unittest.TestCase):
@@ -55,7 +54,7 @@ class CommandTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             patch.object(train, "SOURCE_NAMES", ("fixture",)),
             patch.object(train, "load_training_data", return_value=tiny_data()),
-            patch.object(FraiseModel, "compile", lambda self: None),
+            eager_loss(),
         ):
             root = Path(directory)
             arguments = self.write_inputs(root)

@@ -5,9 +5,9 @@ from tempfile import TemporaryDirectory
 import torch
 from fixtures import tiny_config, tiny_data, tiny_settings, tiny_tokenizer
 
-from fraise.training.artifacts import RunArtifacts, read_run_model_name
-from fraise.training.checkpoints import CheckpointStore
-from fraise.training.manifest import run_manifest
+from fraise.training.run.artifacts import RunArtifacts, read_run_model_name
+from fraise.training.run.checkpoints import CheckpointStore
+from fraise.training.run.manifest import run_manifest
 
 
 class CheckpointRetentionTests(unittest.TestCase):

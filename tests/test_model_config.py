@@ -46,5 +46,22 @@ class ModelConfigTests(unittest.TestCase):
                     load_model_config(self.path)
 
 
+class CompatibilityTests(unittest.TestCase):
+    def test_context_and_vocabulary_must_fit_the_model(self):
+        from fixtures import tiny_config, tiny_settings, tiny_tokenizer
+
+        from fraise.config.compatibility import check_compatibility
+
+        check_compatibility(tiny_tokenizer(), tiny_config(), tiny_settings())
+        with self.assertRaisesRegex(ValueError, "max_seq_len"):
+            check_compatibility(
+                tiny_tokenizer(), tiny_config(), tiny_settings(sequence_length=5)
+            )
+        with self.assertRaisesRegex(ValueError, "vocabulary"):
+            check_compatibility(
+                tiny_tokenizer(), tiny_config(vocab_size=9), tiny_settings()
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

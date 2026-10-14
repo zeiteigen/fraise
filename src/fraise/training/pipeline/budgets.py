@@ -9,7 +9,7 @@ from fraise.config.training import TrainingSettings
 from .packing import packed_target_capacity
 
 
-def _plan_training_budgets(
+def plan_training_budgets(
     train_splits: Mapping[str, Dataset],
     settings: TrainingSettings,
 ) -> list[dict[str, int]]:
@@ -34,7 +34,7 @@ def _plan_training_budgets(
     return [dict(settings.dataset_token_counts) for _ in range(settings.num_epochs)]
 
 
-def _planned_training_steps(
+def planned_training_steps(
     epoch_token_budgets: list[dict[str, int]],
     *,
     sequence_length: int,

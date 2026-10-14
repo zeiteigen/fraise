@@ -8,8 +8,8 @@ from tempfile import TemporaryDirectory
 
 from fixtures import tiny_config, tiny_settings
 
-from fraise.training.validation_deadline import ValidationTimeout
-from fraise.training.validation_process import ValidationProcess
+from fraise.training.validation.deadline import ValidationTimeout
+from fraise.training.validation.process import ValidationProcess
 
 
 class ValidationProcessTests(unittest.TestCase):
@@ -63,7 +63,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
-from fraise.training.worker_lifetime import exit_with_parent
+from fraise.training.validation.worker_lifetime import exit_with_parent
 
 def run(parent_pid):
     exit_with_parent(parent_pid)

@@ -32,6 +32,45 @@ def stream_source(source: Source):
     )
 
 
+class _TrainTokenCounter:
+    """Count training tokens with batched encoding while keeping row order.
+
+    Rows are queued until a batch is encoded, then released in order up to and
+    including the row that reaches the target, exactly as row-at-a-time
+    counting would select them.
+    """
+
+    def __init__(self, tokenizer: Tokenizer, target: int, batch_size: int = 256):
+        self._tokenizer = tokenizer
+        self._target = target
+        self._batch_size = batch_size
+        self._pending: list[str] = []
+        self.tokens = 0
+        self.reached = False
+
+    def add(self, text: str) -> bool:
+        """Queue a row; True when a full batch is ready to flush."""
+        self._pending.append(text)
+        return len(self._pending) >= self._batch_size
+
+    def flush(self) -> list[str]:
+        texts, self._pending = self._pending, []
+        if self.reached:
+            return []
+        non_empty = [text for text in texts if text]
+        lengths = iter(
+            len(encoding.ids) for encoding in self._tokenizer.encode_batch(non_empty)
+        )
+        released = []
+        for text in texts:
+            released.append(text)
+            self.tokens += next(lengths) if text else 0
+            if self.tokens >= self._target:
+                self.reached = True
+                break
+        return released
+
+
 def download_prefixes(
     source: Source,
     caches: dict[str, RawCache],
@@ -55,7 +94,19 @@ def download_prefixes(
                 handles[split] = stack.enter_context(
                     os.fdopen(descriptor, "w", encoding="utf-8")
                 )
-            written_bytes = train_tokens = 0
+            counter = (
+                _TrainTokenCounter(tokenizer, max_train_tokens + 1)
+                if max_train_tokens is not None and "train" in handles
+                else None
+            )
+
+            def write(split, texts):
+                for text in texts:
+                    handles[split].write(
+                        json.dumps({"text": text}, ensure_ascii=False) + "\n"
+                    )
+
+            written_bytes = 0
             for row in stream_source(source):
                 if total_bytes is not None and written_bytes >= total_bytes:
                     break
@@ -65,15 +116,17 @@ def download_prefixes(
                 split = "validation" if written_bytes < validation_bytes else "train"
                 if split == "train" and "train" not in handles:
                     break
-                if split in handles:
-                    handles[split].write(
-                        json.dumps({"text": text}, ensure_ascii=False) + "\n"
-                    )
                 written_bytes += len(text.encode("utf-8"))
-                if split == "train" and max_train_tokens is not None:
-                    train_tokens += len(tokenizer.encode(text).ids) if text else 0
-                    if train_tokens >= max_train_tokens + 1:
+                if split not in handles:
+                    continue
+                if split == "validation" or counter is None:
+                    write(split, [text])
+                elif counter.add(text):
+                    write(split, counter.flush())
+                    if counter.reached:
                         break
+            if counter is not None:
+                write("train", counter.flush())
             for handle in handles.values():
                 handle.flush()
                 os.fsync(handle.fileno())

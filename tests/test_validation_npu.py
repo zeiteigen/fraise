@@ -7,11 +7,11 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 import torch
-from fixtures import tiny_config, tiny_data, tiny_settings, tiny_tokenizer
+from fixtures import eager_loss, tiny_config, tiny_data, tiny_settings, tiny_tokenizer
 
 from fraise.io import read_json
 from fraise.model.model import FraiseModel
-from fraise.training.validation_npu import OpenVinoNpuModel
+from fraise.training.validation.npu import OpenVinoNpuModel
 
 
 class NpuBackendTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class NpuBackendTests(unittest.TestCase):
         core, compiled, ov = self.backend(["CPU"])
         with (
             patch.dict("sys.modules", {"openvino": ov}),
-            patch("fraise.training.validation_npu.load_local_npu_runtime"),
+            patch("fraise.training.validation.npu.load_local_npu_runtime"),
         ):
             with self.assertRaisesRegex(RuntimeError, "CPU fallback is disabled"):
                 OpenVinoNpuModel(
@@ -42,7 +42,7 @@ class NpuBackendTests(unittest.TestCase):
         messages = []
         with (
             patch.dict("sys.modules", {"openvino": ov}),
-            patch("fraise.training.validation_npu.load_local_npu_runtime"),
+            patch("fraise.training.validation.npu.load_local_npu_runtime"),
             patch("torch.export.export"),
         ):
             model = OpenVinoNpuModel(
@@ -65,7 +65,7 @@ class NpuBackendTests(unittest.TestCase):
         compiled.get_property.return_value = ["CPU"]
         with (
             patch.dict("sys.modules", {"openvino": ov}),
-            patch("fraise.training.validation_npu.load_local_npu_runtime"),
+            patch("fraise.training.validation.npu.load_local_npu_runtime"),
             patch("torch.export.export"),
         ):
             with self.assertRaisesRegex(RuntimeError, "Expected NPU execution"):
@@ -105,14 +105,14 @@ class NpuHardwareTests(unittest.TestCase):
                 torch.testing.assert_close(npu(ids), old, atol=0.001, rtol=0.001)
 
     def test_checkpoint_worker_reports_npu_losses_for_every_checkpoint(self):
-        from fraise.training.checkpoints import load_checkpoint_file
-        from fraise.training.preparation import prepare_data
+        from fraise.training.pipeline.preparation import prepare_data
+        from fraise.training.run.checkpoints import load_checkpoint_file
         from fraise.training.training import pretrain_transformer
-        from fraise.training.validation import evaluate
+        from fraise.training.validation.evaluate import evaluate
 
         with (
             TemporaryDirectory() as directory,
-            patch.object(FraiseModel, "compile", lambda self: None),
+            eager_loss(),
         ):
             settings = tiny_settings(
                 validation_device="npu", max_validation_tokens=3, checkpoint_keep_last=1
@@ -135,7 +135,7 @@ class NpuHardwareTests(unittest.TestCase):
             checkpoint = load_checkpoint_file(run / "checkpoint_step_00000002.pt")
             reference = FraiseModel(config).eval()
             reference.load_state_dict(checkpoint["model_state_dict"])
-            split = prepare_data(data, tokenizer, settings, config).validation
+            split = prepare_data(data, tokenizer, settings).validation
             expected = evaluate(reference, split, settings, 0)
             self.assertAlmostEqual(metadata["validation"][1], expected, delta=0.01)
             self.assertEqual(len(list(run.glob("checkpoint_step_*.pt"))), 1)

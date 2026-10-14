@@ -4,10 +4,11 @@ import argparse
 from pathlib import Path
 
 from fraise.config import load_model_config, load_training_settings
+from fraise.config.compatibility import check_compatibility
 from fraise.data.loading import load_training_data
 from fraise.data.sources import SOURCE_NAMES
 from fraise.tokenizer.loading import load_tokenizer
-from fraise.training.artifacts import read_run_model_name
+from fraise.training.run.artifacts import read_run_model_name
 from fraise.training.training import pretrain_transformer
 
 from .common import add_data_dir, cli_errors
@@ -34,11 +35,8 @@ def main(argv=None):
         settings = load_training_settings(args.training_hyperparameters)
         config = load_model_config(args.model_config)
         settings.validate_sources(SOURCE_NAMES)
-        if settings.sequence_length > config.max_seq_len:
-            raise ValueError("sequence_length cannot exceed model max_seq_len")
         tokenizer = load_tokenizer(args.tokenizer_file)
-        if tokenizer.get_vocab_size() != config.vocab_size:
-            raise ValueError("tokenizer/model vocabulary mismatch")
+        check_compatibility(tokenizer, config, settings)
         data = load_training_data(
             settings.dataset_token_counts,
             tokenizer,
@@ -52,8 +50,8 @@ def main(argv=None):
             config,
             args.save_path.expanduser() if args.save_path else args.data_dir / "models",
             name,
-            args.resume,
-            {
+            resume_from=args.resume,
+            config_paths={
                 "training_hyperparameters": args.training_hyperparameters.expanduser(),
                 "model_config": args.model_config.expanduser(),
             },

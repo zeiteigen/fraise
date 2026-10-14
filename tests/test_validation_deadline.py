@@ -2,7 +2,7 @@ import unittest
 from concurrent.futures import Future
 from threading import Event
 
-from fraise.training.validation_deadline import ValidationTimeout, timed_future
+from fraise.training.validation.deadline import ValidationTimeout, timed_future
 
 
 class ValidationDeadlineTests(unittest.TestCase):

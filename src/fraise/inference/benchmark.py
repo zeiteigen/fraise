@@ -1,4 +1,4 @@
-"""Measure greedy full-context decoding throughput without a KV cache."""
+"""Measure greedy decoding throughput through the generation decoder."""
 
 import time
 
@@ -6,7 +6,7 @@ import torch
 
 from fraise.config.values import integer
 
-from .generation import logits_for_context, prompt_ids
+from .generation import IncrementalDecoder, prompt_ids
 
 
 def benchmark_generation(
@@ -20,11 +20,12 @@ def benchmark_generation(
     elapsed = []
     for run in range(warmup_runs + timed_runs):
         ids = initial.copy()
+        decoder = IncrementalDecoder(model)
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         start = time.perf_counter()
         for _ in range(max_new_tokens):
-            ids.append(int(logits_for_context(model, ids).argmax().item()))
+            ids.append(int(decoder.logits(ids).argmax().item()))
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         if run >= warmup_runs:

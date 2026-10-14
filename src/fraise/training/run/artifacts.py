@@ -1,7 +1,7 @@
 """Create run directories and archive configuration and tokenizer artifacts."""
 
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from fraise.io import atomic_write, read_json, write_json
@@ -28,6 +28,36 @@ def resolve_checkpoint(path: Path) -> Path:
     return paths[-1]
 
 
+@dataclass
+class RunDestination:
+    """Where a run writes, checked before any expensive preparation starts."""
+
+    directory: Path
+    latest: Path | None
+    metadata: dict | None
+
+
+def inspect_run_destination(
+    root: Path, name: str, manifest: dict, resume_from: Path | None = None
+) -> RunDestination:
+    """Validate a new or resumed run directory without writing to it."""
+    if not name or Path(name).name != name or name in (".", ".."):
+        raise ValueError("model name must be a non-empty directory name")
+    if resume_from is None:
+        directory = Path(root) / name
+        if directory.exists() and any(directory.iterdir()):
+            raise FileExistsError(
+                f"run directory is not empty: {directory}; choose a new name or use --resume"
+            )
+        return RunDestination(directory, None, None)
+    latest = resolve_checkpoint(resume_from)
+    metadata = read_json(latest.parent / META_FILE_NAME)
+    if name != metadata["model_name"]:
+        raise ValueError("resume model_name does not match run metadata")
+    check_resume_identity(metadata["manifest"], manifest)
+    return RunDestination(latest.parent, latest, metadata)
+
+
 class RunArtifacts:
     def __init__(
         self,
@@ -41,29 +71,17 @@ class RunArtifacts:
         resume_from: Path | None = None,
         config_paths: dict[str, Path] | None = None,
     ):
-        if not name or Path(name).name != name or name in (".", ".."):
-            raise ValueError("model name must be a non-empty directory name")
-        self.latest = (
-            resolve_checkpoint(resume_from) if resume_from is not None else None
-        )
-        self.directory = (
-            self.latest.parent if self.latest is not None else Path(root) / name
-        )
+        destination = inspect_run_destination(root, name, manifest, resume_from)
+        self.latest = destination.latest
+        self.directory = destination.directory
         self.path = self.directory / META_FILE_NAME
-        if self.latest is not None:
-            self.metadata = read_json(self.path)
-            if name != self.metadata["model_name"]:
-                raise ValueError("resume model_name does not match run metadata")
-            check_resume_identity(self.metadata["manifest"], manifest)
+        if destination.metadata is not None:
+            self.metadata = destination.metadata
             self.metadata["training_finished"] = False
             self.metadata.setdefault("resume_provenance", []).append(
                 manifest["provenance"]
             )
         else:
-            if self.directory.exists() and any(self.directory.iterdir()):
-                raise FileExistsError(
-                    f"run directory is not empty: {self.directory}; choose a new name or use --resume"
-                )
             self.directory.mkdir(parents=True, exist_ok=True)
             self.metadata = {
                 "schema_version": 3,
@@ -81,15 +99,15 @@ class RunArtifacts:
                 ("model_config", model_config),
                 ("training_hyperparameters", settings),
             ):
-                destination = self.directory / f"{role}.json"
+                target = self.directory / f"{role}.json"
                 if config_paths and role in config_paths:
                     contents = Path(config_paths[role]).read_text()
                     atomic_write(
-                        destination,
+                        target,
                         lambda handle, contents=contents: handle.write(contents),
                     )
                 else:
-                    write_json(destination, asdict(config))
+                    write_json(target, asdict(config))
         self.update()
 
     def update(self, **values):

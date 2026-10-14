@@ -1,25 +1,37 @@
 """Serialize, restore, and retain resumable checkpoints."""
 
+import pickle
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from fraise.io import atomic_write
 
 from .rng import capture_rng_state, restore_rng_state
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+# Schema 2 and 3 checkpoints pickled NumPy's RNG state; allow only those types.
+_LEGACY_NUMPY_GLOBALS = [
+    np._core.multiarray._reconstruct,
+    np.ndarray,
+    np.dtype,
+    np.dtypes.UInt32DType,
+]
+
+
+def checkpoint_step(path: Path) -> int | None:
+    step = path.stem.removeprefix("checkpoint_step_")
+    return int(step) if path.stem != step and step.isdecimal() else None
 
 
 def step_checkpoints(directory: Path) -> list[Path]:
     paths = [
         path
         for path in directory.glob("checkpoint_step_*.pt")
-        if path.stem.removeprefix("checkpoint_step_").isdecimal()
+        if checkpoint_step(path) is not None
     ]
-    return sorted(
-        paths, key=lambda path: int(path.stem.removeprefix("checkpoint_step_"))
-    )
+    return sorted(paths, key=checkpoint_step)
 
 
 def save_model_state_dict(state_dict, path: str | Path) -> Path:
@@ -41,6 +53,7 @@ def migrate_v2_weights(weights: dict) -> dict:
 def _validate_checkpoint(checkpoint, path) -> dict:
     if not isinstance(checkpoint, dict) or checkpoint.get("schema_version") not in (
         2,
+        3,
         SCHEMA_VERSION,
     ):
         raise ValueError(f"unsupported training checkpoint: {path}")
@@ -64,14 +77,23 @@ def _validate_checkpoint(checkpoint, path) -> dict:
     return checkpoint
 
 
+def _safe_load(path: str | Path, *, mmap: bool = False):
+    """Load tensors and plain containers only; never execute pickled code."""
+    try:
+        with torch.serialization.safe_globals(_LEGACY_NUMPY_GLOBALS):
+            return torch.load(path, map_location="cpu", weights_only=True, mmap=mmap)
+    except pickle.UnpicklingError as error:
+        raise ValueError(
+            f"refusing to load untrusted objects from {path}: {error}"
+        ) from error
+
+
 def load_checkpoint_file(path: str | Path, *, mmap: bool = False) -> dict:
-    return _validate_checkpoint(
-        torch.load(path, map_location="cpu", weights_only=False, mmap=mmap), path
-    )
+    return _validate_checkpoint(_safe_load(path, mmap=mmap), path)
 
 
 def load_model_weights(path: str | Path) -> dict:
-    weights = torch.load(path, map_location="cpu", weights_only=False)
+    weights = _safe_load(path)
     if isinstance(weights, dict) and "schema_version" in weights:
         return _validate_checkpoint(weights, path)["model_state_dict"]
     if (
@@ -113,6 +135,30 @@ class CheckpointStore:
         scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         restore_rng_state(checkpoint["rng_state"])
         return TrainingState.from_checkpoint(checkpoint)
+
+    def supersede_after(self, step: int) -> tuple[Path, list[Path]] | None:
+        """Move checkpoints from an abandoned continuation out of the live run.
+
+        Resuming from an older checkpoint starts a new timeline. Later step files
+        would otherwise survive retention (which keeps the highest steps) and be
+        chosen by a later directory resume. They are moved, never deleted.
+        """
+        newer = [
+            path
+            for path in step_checkpoints(self.directory)
+            if checkpoint_step(path) > step
+        ]
+        if not newer:
+            return None
+        base = self.directory / f"superseded-after-step-{step:08d}"
+        target, suffix = base, 1
+        while target.exists():
+            suffix += 1
+            target = base.with_name(f"{base.name}-{suffix}")
+        target.mkdir()
+        for path in newer:
+            path.rename(target / path.name)
+        return target, newer
 
     def prune(self, keep_last: int, protected=()):
         paths = step_checkpoints(self.directory)
