@@ -11,7 +11,8 @@ from fraise.architectures import ModelProtocol, get_architecture
 from fraise.config.training import TrainingSettings
 
 from ..run.checkpoints import load_checkpoint_file
-from .evaluate import evaluate
+from .evaluate import evaluate_scores
+from .measures import ValidationMeasures
 from .worker_lifetime import exit_with_parent
 
 
@@ -21,6 +22,7 @@ class CheckpointValidator:
     split: Dataset
     settings: TrainingSettings
     pad_token_id: int
+    measures: ValidationMeasures | None = None
 
     def evaluate_checkpoint(self, path, *, progress=None):
         if progress is not None:
@@ -33,10 +35,21 @@ class CheckpointValidator:
         if settings.validation_device == "npu":
             from .npu import OpenVinoNpuModel
 
+            if getattr(model, "hierarchical", False):
+                raise RuntimeError(
+                    "NPU validation supports models with vocabulary logits; "
+                    "use validation_device 'cpu' for hierarchical models"
+                )
+
             model = OpenVinoNpuModel(model, settings.sequence_length, progress=progress)
             settings = replace(settings, minibatch_size=1)
-        return evaluate(
-            model, self.split, settings, self.pad_token_id, progress=progress
+        return evaluate_scores(
+            model,
+            self.split,
+            settings,
+            self.pad_token_id,
+            progress=progress,
+            measures=self.measures,
         )
 
 
@@ -45,7 +58,14 @@ _events = None
 
 
 def init_validation_worker(
-    config, split, settings, pad_token_id, parent_pid, events, architecture=None
+    config,
+    split,
+    settings,
+    pad_token_id,
+    parent_pid,
+    events,
+    architecture=None,
+    measures=None,
 ):
     global _worker, _events
     exit_with_parent(parent_pid)
@@ -58,6 +78,7 @@ def init_validation_worker(
         split,
         replace(settings, use_bf16=False),
         pad_token_id,
+        measures,
     )
     events.send(
         f"Validation worker ready: PID {os.getpid()}, backend {settings.validation_device}, "
@@ -74,8 +95,12 @@ def evaluate_checkpoint(step, path):
         _events.send(f"Validation step {step}: {message}")
 
     progress(f"Started checkpoint {path}.")
-    loss = _worker.evaluate_checkpoint(path, progress=progress)
+    scores = _worker.evaluate_checkpoint(path, progress=progress)
+    loss = None if scores is None else scores["loss"]
+    bpb = None if scores is None else scores["bits_per_byte"]
     progress(
-        f"Worker finished in {monotonic() - started:.1f}s; loss {loss}; result ready for training."
+        f"Worker finished in {monotonic() - started:.1f}s; loss {loss}"
+        + (f", {bpb:.6f} bits/byte" if bpb is not None else "")
+        + "; result ready for training."
     )
-    return loss
+    return scores

@@ -1,9 +1,10 @@
 # Adding a local architecture
 
 An architecture plugs into the existing causal language-model training and
-inference pipeline. Input and output use the same saved tokenizer and vocabulary.
-Asymmetric vocabularies, custom losses, and hierarchical decoding need additional
-pipeline work beyond this interface.
+inference pipeline. Most architectures read and predict the same saved tokenizer
+vocabulary. Structured outputs (such as the asymmetric `fraise` architecture,
+which predicts base tokens for macro inputs) use the optional hooks described in
+[Structured outputs](#structured-outputs).
 
 Keep configuration, model implementation, and adapter hooks in focused modules.
 The current adapter, `fraise.architectures.transformer`, is a working reference.
@@ -98,6 +99,36 @@ scope so validation workers can unpickle them under multiprocessing `spawn`.
 New models automatically appear in the web architecture selector. `example_config`
 provides the initial settings; scalar dataclass fields become form controls and
 the advanced JSON editor exposes the full configuration.
+
+## Structured outputs
+
+Models whose forward pass does not return vocabulary logits can still use the
+shared training, validation, and inference paths:
+
+- `target_loss_sum(input_ids, targets, target_mask)` on the model returns the
+  summed negative log-likelihood of the valid targets. When present, training,
+  validation, and `score_text` call it instead of applying cross-entropy to
+  `forward`'s output.
+- `hierarchical = True` on the model routes `iter_generate`, `top_next_tokens`,
+  and `benchmark_generation` to trie-constrained base-token generation
+  (`fraise.inference.hierarchical`). It needs a `local` decoder, an `end_id`,
+  and `decompositions`/`macro_lengths` buffers; see `FraiseHierarchicalModel`.
+
+Three optional `ArchitectureSpec` fields support tokenizer-dependent models:
+
+```python
+SPEC = ArchitectureSpec(
+    ...,
+    check_tokenizer=check_tokenizer,  # (config, tokenizer): raise ValueError early
+    bind_tokenizer=bind_tokenizer,    # (model, tokenizer): copy structure into buffers
+    parameter_breakdown=breakdown,    # (config) -> {group: count}, summing to the total
+)
+```
+
+`check_tokenizer` runs with the other compatibility checks, before data
+preparation. `bind_tokenizer` runs on every run start, before weights are
+restored; store what it copies in persistent buffers so checkpoints are
+self-contained. `params` prints the breakdown under the total.
 
 ## Validation
 

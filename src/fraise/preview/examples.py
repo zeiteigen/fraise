@@ -2,7 +2,9 @@
 
 from fraise.config.values import integer
 from fraise.tokenizer.loading import special_token_id
+from fraise.training.pipeline.batch_types import target_units
 from fraise.training.pipeline.batches import iter_dataset_packed_batches
+from fraise.training.pipeline.budgets import epoch_seed
 from fraise.training.pipeline.preparation import prepare_data
 
 
@@ -10,8 +12,13 @@ def collect_examples(data, tokenizer, settings, count, *, first_source_only=Fals
     integer("count", count)
     prepared = prepare_data(data, tokenizer, settings)
     if first_source_only:
-        first_budget = next(iter(prepared.budgets[0].values()))
-        if first_budget < (count - 1) * settings.sequence_length + 1:
+        first_name, first_budget = next(iter(prepared.budgets[0].items()))
+        enough = (
+            prepared.windows[0].get(first_name, 0) >= count
+            if prepared.unit_lengths is not None
+            else first_budget >= (count - 1) * settings.sequence_length + 1
+        )
+        if not enough:
             raise ValueError(
                 "first source's first epoch cannot supply --count windows; omit --first-source-only"
             )
@@ -25,9 +32,11 @@ def collect_examples(data, tokenizer, settings, count, *, first_source_only=Fals
             settings.packing_stride,
             pad_id,
             batch_size=settings.batch_size,
-            seed=settings.seed + epoch if settings.shuffle_per_epoch else settings.seed,
+            seed=epoch_seed(settings, epoch),
             shuffle_per_epoch=settings.shuffle_per_epoch,
             shuffle_data=settings.shuffle_data,
+            unit_lengths=prepared.unit_lengths,
+            window_counts=prepared.windows[epoch],
         ):
             for position, source in enumerate(batch.sources):
                 valid_targets = int(batch.target_mask[position].sum().item())
@@ -41,6 +50,9 @@ def collect_examples(data, tokenizer, settings, count, *, first_source_only=Fals
                         "batch": batch_index,
                         "batch_position": position,
                         "valid_targets": valid_targets,
+                        "base_tokens": target_units(
+                            batch.slice(position, position + 1), prepared.unit_lengths
+                        ),
                         "input_text": tokenizer.decode(
                             inputs, skip_special_tokens=False
                         ),

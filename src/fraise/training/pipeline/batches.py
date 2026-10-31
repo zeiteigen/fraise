@@ -7,7 +7,7 @@ import torch
 
 from .batch_types import PackedTokenBatch
 from .mixing import iter_source_blocks, mixed_source_order, sequential_source_order
-from .packing import iter_packed_blocks
+from .packing import iter_packed_blocks, plan_unit_windows
 
 
 def iter_dataset_packed_batches(
@@ -22,14 +22,29 @@ def iter_dataset_packed_batches(
     seed=0,
     shuffle_per_epoch=False,
     shuffle_data=False,
+    unit_lengths=None,
+    window_counts=None,
 ):
     # Each source yields ceil(budget / sequence_length) windows: all are full
-    # except possibly its last.
-    counts = {
-        name: (token_budgets[name] + sequence_length - 1) // sequence_length
-        for name in splits
-        if token_budgets[name] > 0
-    }
+    # except possibly its last. Macro streams plan their counts by scanning
+    # unless the caller supplies the already planned ``window_counts``.
+    if window_counts is None:
+        window_counts = {
+            name: (token_budgets[name] + sequence_length - 1) // sequence_length
+            if unit_lengths is None
+            else plan_unit_windows(
+                splits[name],
+                sequence_length,
+                packing_stride,
+                token_budgets[name],
+                unit_lengths,
+                seed=seed,
+                shuffle=shuffle_per_epoch,
+            ).windows
+            for name in splits
+            if token_budgets[name] > 0
+        }
+    counts = {name: window_counts[name] for name in splits if token_budgets[name] > 0}
     order = (
         mixed_source_order(counts, seed=seed)
         if shuffle_data
@@ -47,6 +62,7 @@ def iter_dataset_packed_batches(
             shuffle=shuffle_per_epoch,
             max_tokens=token_budgets[name],
             start_window=skipped[name],
+            unit_lengths=unit_lengths,
         )
         for name in counts
     }

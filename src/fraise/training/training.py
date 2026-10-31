@@ -2,21 +2,24 @@
 
 from pathlib import Path
 
-from fraise.config.compatibility import check_compatibility
 from fraise.architectures import ModelConfigProtocol
+from fraise.config.compatibility import check_compatibility
 from fraise.config.training import TrainingSettings
 from fraise.data.types import TrainingData
 from fraise.tokenizer.loading import special_token_id
 
 from .diagnostics import TrainingDiagnostics
 from .events import emit
+from .pipeline.batch_types import target_units
 from .pipeline.batches import iter_dataset_packed_batches
+from .pipeline.budgets import epoch_seed
 from .pipeline.prefetch import prefetch_batches
 from .pipeline.preparation import prepare_data
 from .run.artifacts import inspect_run_destination
 from .run.lifecycle import RunLifecycle
 from .run.manifest import run_manifest
 from .runtime import build_runtime, resolve_device
+from .validation.measures import validation_measures
 from .validation.runner import ValidationRunner
 
 
@@ -53,6 +56,7 @@ def pretrain_model(
         prepared.steps,
         device,
         initialize_weights=resume_from is None,
+        tokenizer=tokenizer,
     )
     run = RunLifecycle(
         save_path,
@@ -69,7 +73,12 @@ def pretrain_model(
     runtime.log = run.log
     run.artifacts.update(training_status="running")
     emit(on_event, "stage", phase="training")
-    total_train_tokens = settings.max_train_tokens * settings.num_epochs
+    total_train_tokens = prepared.total_targets
+    if prepared.unit_lengths is not None:
+        run.log(
+            "Budgets count base tokens covered by macro targets; each source ends "
+            f"with the macro that reaches its count ({total_train_tokens:,} exact)."
+        )
     run.log(
         f"Training {settings.max_train_tokens:,} targets per epoch for {settings.num_epochs} "
         f"epochs ({total_train_tokens:,} total) from step {state.global_step}; "
@@ -88,11 +97,17 @@ def pretrain_model(
         settings,
         pad_id,
         run.log,
+        measures=validation_measures(tokenizer),
         on_update=run.record_validation,
         stop_requested=stop_requested,
     ) as validation:
         diagnostics = TrainingDiagnostics(
-            runtime, state, settings.log_interval_steps, run.log, on_event=on_event
+            runtime,
+            state,
+            settings.log_interval_steps,
+            run.log,
+            on_event=on_event,
+            total_tokens=total_train_tokens,
         )
         for epoch in range(state.epoch, settings.num_epochs):
             if stop_requested is not None and stop_requested():
@@ -108,11 +123,11 @@ def pretrain_model(
                 pad_id,
                 batch_size=settings.batch_size,
                 start_batch_index=state.next_batch_index,
-                seed=settings.seed + epoch
-                if settings.shuffle_per_epoch
-                else settings.seed,
+                seed=epoch_seed(settings, epoch),
                 shuffle_per_epoch=settings.shuffle_per_epoch,
                 shuffle_data=settings.shuffle_data,
+                unit_lengths=prepared.unit_lengths,
+                window_counts=prepared.windows[epoch],
             )
             for batch_index, batch in prefetch_batches(
                 batches, pin_memory=runtime.device.type == "cuda"
@@ -121,7 +136,12 @@ def pretrain_model(
                     run.stop(runtime, state, validation)
                     return runtime.model
                 loss, valid_tokens, grad_norm = runtime.step(batch)
-                state.record_step(batch_index, loss, valid_tokens)
+                state.record_step(
+                    batch_index,
+                    loss,
+                    valid_tokens,
+                    target_units(batch, prepared.unit_lengths),
+                )
                 if stop_requested is not None and stop_requested():
                     diagnostics.record(state, loss, grad_norm, validation)
                     diagnostics.report(state, validation)
@@ -145,7 +165,7 @@ def pretrain_model(
                     f"epoch {epoch + 1} ended at {state.epoch_valid_tokens} / "
                     f"{epoch_targets} target tokens"
                 )
-            epoch_loss = state.epoch_loss_sum / state.epoch_valid_tokens
+            epoch_loss = state.epoch_loss
             epoch_tokens = state.epoch_valid_tokens
             state.finish_epoch()
             run.checkpoint(runtime, state, validation)

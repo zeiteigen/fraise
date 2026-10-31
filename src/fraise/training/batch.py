@@ -13,7 +13,11 @@ def token_loss_sum(model, input_ids, targets, target_mask):
 
     Masked targets are ignored rather than gathered out, so there is no host sync
     and a compiled graph sees the same shapes for full, short, and padded inputs.
+    Models with structured outputs supply ``target_loss_sum`` with this signature.
     """
+    custom = getattr(model, "target_loss_sum", None)
+    if custom is not None:
+        return custom(input_ids, targets, target_mask)
     logits = model(input_ids)
     targets = targets.masked_fill(~target_mask, IGNORE_INDEX)
     return F.cross_entropy(

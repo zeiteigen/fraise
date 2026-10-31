@@ -1,9 +1,17 @@
 # Fraise
 
 Fraise explores language models with a large macro input vocabulary and a smaller
-base output vocabulary. The current implementation is the conventional
-byte-level BPE transformer baseline described in [PoC.md](PoC.md). Hierarchical
-composition, trie decoding, and dynamic decomposition remain experiment stages.
+base output vocabulary, as described in [PoC.md](PoC.md). Implemented stages:
+
+1. 8k/8k baseline: the `transformer` architecture with a byte-level BPE tokenizer.
+2. 64k/64k symmetric baseline: the same `transformer` with a macro tokenizer.
+3. Static 64k-input / 8k-output Fraise: the `fraise` architecture.
+4. Compositional macro embeddings (`macro_embedding`, ablatable to `independent`).
+5. Learned 32-dimensional macro residuals (`macro_residual_dim`; 0 disables them).
+6. Trie-based autoregressive bridging between the global and local decoders.
+
+Multi-token prediction, dynamic decomposition, and variable-resolution KV caches
+remain experiment stages. See [Asymmetric Fraise](#asymmetric-fraise-macro-in-base-out).
 
 ## Local model workspace
 
@@ -46,15 +54,15 @@ the same source loaders as the CLI and may download when not already cached.
 
 ## Model architectures
 
-Model configuration JSON accepts `"architecture": "transformer"`. Omitting it
-selects the existing baseline, including when loading older runs. Architecture
+Model configuration JSON accepts `"architecture": "transformer"` or `"fraise"`.
+Omitting it selects the existing baseline, including when loading older runs. Architecture
 selection is shared by training, validation, inference, and parameter counting.
 
 The registry in `fraise.architectures` supplies configuration, construction,
 initialization, parameter-counting, and optimizer hooks. See
 [Adding an architecture](docs/architectures.md) for the contract and registration
-workflow. The first release registers the existing Transformer; additional PoC
-architectures remain separate experiments.
+workflow. The built-in registry provides the Transformer and the asymmetric
+Fraise model.
 
 ## Setup
 
@@ -71,8 +79,8 @@ separately override the parent directory of model runs.
 
 ## Create a tokenizer
 
-Select the sources explicitly. Streaming sources default to a 0.1 GB download
-cap each; BabyLM uses its complete pinned native text snapshot. Optionally cap
+Select the sources explicitly. Sources stream from the Hugging Face Hub with a
+0.1 GB download cap each by default. Optionally cap
 text consumed during tokenizer training with `--max-bytes-per-source`. Limits
 keep complete documents and can exceed the requested size by one document.
 FineWeb's tokenizer text starts after the 0.05 GB prefix reserved for validation,
@@ -82,7 +90,7 @@ still measures the text available to the tokenizer.
 ```sh
 uv run create-tokenizer \
   --vocab-size 8192 \
-  --sources babylm cosmopedia-khanacademy cosmopedia-stories fineweb-edu \
+  --sources cosmopedia-khanacademy cosmopedia-stories fineweb-edu \
   --source-size-gb 0.1 \
   --max-bytes-per-source 100000000
 ```
@@ -96,6 +104,52 @@ Loading a tokenizer preserves its saved vocabulary and post-processing. It must
 already contain `<|pad|>`, `<|bos|>`, and `<|eos|>`. Newly trained tokenizers add BOS
 and EOS once per document. Byte-level tokenizers require at least 259 vocabulary
 entries for the byte alphabet and special tokens.
+
+## Create a macro tokenizer
+
+A macro tokenizer learns merges over the *IDs* of an existing base tokenizer, so
+every macro has one deterministic decomposition into base tokens:
+
+```sh
+uv run create-tokenizer \
+  --base-tokenizer data/tokenizers/fraise-8192-....json \
+  --vocab-size 65536 \
+  --max-macro-length 8 \
+  --sources fineweb-edu \
+  --max-bytes-per-source 200000000
+```
+
+Text is encoded by the base tokenizer, each base ID becomes one private-use
+character, and the Rust BPE trainer merges adjacent IDs. Macro IDs below the base
+vocabulary size are the base tokens themselves; merge `k` creates macro
+`base_vocab_size + k`. Special tokens never merge, a base token containing a line
+break ends a macro, and no macro exceeds `--max-macro-length` base tokens.
+Expanding a macro encoding always reproduces the base encoding exactly.
+
+The artifact is one JSON file (`fraise-macro-VOCAB-KEY.json`) that embeds the
+base tokenizer and its checksum, so runs archive it like any tokenizer and
+`load_tokenizer` recognizes it. It supplies `encode`, `encode_batch`, `decode`,
+`expand`, and `decomposition`. Merging over 100 MB of text takes about two minutes.
+
+### Budgets count base tokens
+
+PoC comparisons need every architecture to see the same text, so token budgets
+(`dataset_token_counts`, `max_train_tokens`, `max_validation_tokens`) always count
+base tokens. With a macro tokenizer a target macro counts as its decomposition
+length. Downloads are selected with the base tokenizer, so a macro run and an 8k
+run with the same budgets reuse the same raw cache. Each source ends with the
+macro that reaches its count, so an epoch can exceed its count by less than one
+macro; planning computes these exact counts (logged at the start) and checks them
+at the end of each epoch. Progress, throughput, and `tokens_seen` report base
+tokens, while training loss stays the mean over the model's own targets.
+
+### Bits per byte
+
+Validation reports bits per byte as well as loss whenever the base tokenizer is
+byte-level BPE: summed negative log-likelihood in bits divided by the UTF-8 bytes
+of the scored targets. BPB compares models with different tokenizers, which
+token losses do not. It appears in the log, in `validation_results`, in the web
+inspector, and in `score_text`.
 
 ## Configure and train
 
@@ -141,8 +195,7 @@ The checked-in `hyperparameters.example.json` provides the training configuratio
   "sequence_length": 512,
   "max_train_tokens": 250000000,
   "dataset_token_counts": {
-    "babylm": 100000000,
-    "fineweb-edu": 150000000,
+    "fineweb-edu": 250000000,
     "cosmopedia-khanacademy": 0,
     "cosmopedia-stories": 0
   },
@@ -301,7 +354,7 @@ counts. With `shuffle_per_epoch=false`, the mixed order repeats each epoch;
 with it enabled, both passage order and source mixing change each epoch.
 Both controls are reproducible from `seed` and are shared by training and preview.
 
-When `shuffle_data=false`, sources are traversed in the fixed order BabyLM,
+When `shuffle_data=false`, sources are traversed in the fixed order
 FineWeb-Edu, Cosmopedia Khan Academy, and Cosmopedia stories. The legacy `shuffle`
 setting remains an alias for `shuffle_per_epoch`; old runs retain unmixed source
 order unless a fresh run enables `shuffle_data`.
@@ -315,8 +368,7 @@ Each source must supply its allocated targets in a single epoch. A
 capacity check rejects larger allocations even when multiple epochs are
 requested. FineWeb
 reserves the first 0.05 GB of source text for validation even when its training
-allocation is zero. BabyLM groups consecutive source text into 256-word passages,
-preserving whitespace and adding document markers once per passage.
+allocation is zero.
 
 ## Preview the training data
 
@@ -413,6 +465,65 @@ the last position onto the vocabulary. Once a sequence exceeds `max_seq_len`, th
 context window slides and each step recomputes the visible window. Positive
 sampling temperatures work with the default nucleus sampler; optional top-k
 filtering can also be supplied.
+
+## Asymmetric Fraise (macro in, base out)
+
+`model_config.fraise.example.json` configures the `fraise` architecture. Train it
+with a macro tokenizer whose vocabulary sizes match `vocab_size` (macro input)
+and `base_vocab_size` (base output); `max_macro_length` must cover the
+tokenizer's longest macro:
+
+```sh
+uv run params model_config.fraise.example.json
+uv run train \
+  --training-hyperparameters hyperparameters.json \
+  --model-config model_config.fraise.example.json \
+  --tokenizer-file data/tokenizers/fraise-macro-65536-....json \
+  --model-name fraise-001
+```
+
+**Macro inputs.** With `"macro_embedding": "compositional"`, the input for macro
+`m` with base decomposition `b_1 .. b_k` is
+
+    sum_i g_i * E[b_i] / sqrt(k)  +  length(k)  +  P r(m)
+
+with per-position gates `g_i`, a shared base embedding table `E`, and a
+`macro_residual_dim`-dimensional residual `r(m)` projected to the model width.
+The projection starts at zero, so every macro begins as its constituents; weight
+decay pulls rarely seen residuals back toward the shared composition.
+`"independent"` (with `macro_residual_dim: 0`) uses one full embedding per macro
+for the ablation. `params` reports the dense transformer separately from lexical
+tables, including the per-macro (`macro_lexical`) parameters.
+
+**Global transformer.** The same transformer as the baseline runs over macro
+positions, so `sequence_length` and `max_seq_len` count macros and the KV cache
+holds one entry per macro.
+
+**Local decoder and trie bridging.** For the macro after position `t`, a small
+decoder emits its base tokens and then an END symbol, over an output vocabulary
+of `base_vocab_size + 1`. Its state for slot `j` is a projection of the global
+hidden state plus a gated sum of the base tokens already emitted for that macro,
+followed by `local_num_layers` SwiGLU blocks of width `local_dim`. Every slot
+depends only on its own context and prefix, so training evaluates all real slots
+in one batch. A macro's loss is the summed cross-entropy of its base tokens and
+END, so training and validation losses are negative log-likelihoods per macro,
+directly comparable to the symmetric 64k baseline on the same tokenizer.
+
+Generation walks a trie of macro decompositions. Each base token is sampled from
+the children of the current trie node, plus END when the path already spells a
+complete macro (sampling settings apply within that set); a leaf ends the macro
+without consulting the decoder. Only complete macros reach the global transformer,
+whose KV cache advances once per macro. The last prompt macro is re-decided: it is
+removed from the global context and its base tokens are forced as the first trie
+path, so a prompt ending in `straw` can continue into `strawberry`. Generated
+`ids` and token counts are base tokens. `benchmark_generation` also reports
+global transformer steps per generated token.
+
+Macro decompositions are persistent model buffers, bound from the tokenizer when
+a run starts, so checkpoints and final weights are self-contained. The variable
+number of local slots is kept out of the fixed-shape compiled graph; the rest of
+the forward pass compiles normally. NPU validation is not supported for
+hierarchical models; use `validation_device: "cpu"`.
 
 ## Existing artifacts
 

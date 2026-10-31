@@ -18,5 +18,5 @@ FINEWEB = Source(
 KHAN = Source("cosmopedia-khanacademy", "HuggingFaceTB/cosmopedia", "khanacademy")
 STORIES = Source("cosmopedia-stories", "HuggingFaceTB/cosmopedia", "stories")
 STREAM_SOURCES = {source.name: source for source in (FINEWEB, KHAN, STORIES)}
-SOURCE_NAMES = ("babylm", *STREAM_SOURCES)
+SOURCE_NAMES = tuple(STREAM_SOURCES)
 VALIDATION_SIZE_GB = 0.05

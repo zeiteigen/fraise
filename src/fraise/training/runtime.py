@@ -95,6 +95,7 @@ def build_runtime(
     device: torch.device | None = None,
     *,
     initialize_weights=True,
+    tokenizer=None,
 ):
     device = resolve_device(device, settings)
     if device.type == "cuda":
@@ -105,6 +106,9 @@ def build_runtime(
     model = build_model(config)
     if initialize_weights:
         architecture.initialize(model, config, settings)
+    if tokenizer is not None and architecture.bind_tokenizer is not None:
+        # Resumed runs overwrite these buffers with identical checkpoint values.
+        architecture.bind_tokenizer(model, tokenizer)
     model.to(device)
     # Compiling a loss function (not the module) keeps state-dict keys unchanged.
     loss_sum = compile_loss_sum() if settings.use_compile else token_loss_sum

@@ -5,13 +5,11 @@ from pathlib import Path
 from tokenizers import Tokenizer
 
 from fraise.paths import data_root
+from fraise.tokenizer.macro import counting_tokenizer
 
-from .babylm import load_babylm
 from .sources import FINEWEB, SOURCE_NAMES, STREAM_SOURCES, VALIDATION_SIZE_GB
 from .stream import load_stream
 from .types import TrainingData
-
-BABYLM_DIRECTORY = "babylm-2026-100m"
 
 
 def load_training_data(
@@ -29,10 +27,7 @@ def load_training_data(
     result = TrainingData()
     for name in SOURCE_NAMES:
         selected = counts.get(name, 0) > 0 and (sources is None or name in sources)
-        if name == "babylm":
-            if selected:
-                result.train[name] = load_babylm(raw_root / BABYLM_DIRECTORY)
-        elif selected or (name == FINEWEB.name and validation):
+        if selected or (name == FINEWEB.name and validation):
             source = STREAM_SOURCES[name]
             loaded = load_stream(
                 source,
@@ -42,7 +37,9 @@ def load_training_data(
                 include_train=selected,
                 include_validation=validation,
                 max_train_tokens=counts[name] if selected else None,
-                tokenizer=tokenizer if selected else None,
+                # Budgets count shared base tokens, so every tokenizer built on the
+                # same base selects (and caches) exactly the same source text.
+                tokenizer=counting_tokenizer(tokenizer) if selected else None,
             )
             result.train.update(loaded.train)
             if validation and loaded.validation is not None:
@@ -61,19 +58,16 @@ def load_tokenizer_sources(
     for name in SOURCE_NAMES:
         if name not in names:
             continue
-        if name == "babylm":
-            sources[name] = load_babylm(raw_root / BABYLM_DIRECTORY)
-        else:
-            # The FineWeb held-out prefix is excluded so tokenizer merges are not
-            # fit to the documents that later measure validation loss.
-            held_out = VALIDATION_SIZE_GB if name == FINEWEB.name else 0
-            sources.update(
-                load_stream(
-                    STREAM_SOURCES[name],
-                    raw_root / name,
-                    size_gb=size_gb + held_out,
-                    validation_size_gb=held_out,
-                    include_validation=False,
-                ).train
-            )
+        # The FineWeb held-out prefix is excluded so tokenizer merges are not
+        # fit to the documents that later measure validation loss.
+        held_out = VALIDATION_SIZE_GB if name == FINEWEB.name else 0
+        sources.update(
+            load_stream(
+                STREAM_SOURCES[name],
+                raw_root / name,
+                size_gb=size_gb + held_out,
+                validation_size_gb=held_out,
+                include_validation=False,
+            ).train
+        )
     return sources

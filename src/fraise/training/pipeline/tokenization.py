@@ -3,17 +3,18 @@
 import hashlib
 from collections.abc import Iterator
 
+import numpy as np
 from datasets import Dataset, Features, List, Value
-from tokenizers import Tokenizer
 
 from fraise.tokenizer.loading import tokenizer_fingerprint
+from fraise.tokenizer.macro import unit_lengths
 
 TOKEN_IDS_COLUMN = "token_ids"
 
 
 def pretokenize_split(
     split: Dataset,
-    tokenizer: Tokenizer,
+    tokenizer,
     *,
     tokenization_batch_size: int,
     max_tokens: int | None = None,
@@ -26,6 +27,10 @@ def pretokenize_split(
     the prefix needed for that many causal targets is encoded. One additional
     token is retained as the final input for the shifted targets. The result
     is stored in an on-disk Arrow cache.
+
+    Macro tokenizers measure ``max_tokens`` in base tokens: macros are retained
+    until their decompositions cover the budget plus one base token, keeping
+    the macro that crosses that boundary.
     """
     if "text" not in split.column_names:
         raise ValueError(
@@ -51,6 +56,8 @@ def pretokenize_split(
     columns = ["text"]
     # int32 halves cache size and read bandwidth; windows widen to int64 on packing.
     features = {TOKEN_IDS_COLUMN: List(Value("int32"))}
+
+    lengths = unit_lengths(tokenizer)
 
     def encoded_rows() -> Iterator[dict[str, object]]:
         selected_token_count = 0
@@ -80,10 +87,16 @@ def pretokenize_split(
                 token_ids = token_ids_by_row.get(row_index, [])
                 if target_token_count is not None:
                     remaining = target_token_count - selected_token_count
-                    token_ids = token_ids[:remaining]
+                    if lengths is None:
+                        token_ids = token_ids[:remaining]
+                        selected_token_count += len(token_ids)
+                    elif token_ids:
+                        covered = np.cumsum(lengths[token_ids])
+                        keep = int(np.searchsorted(covered, remaining)) + 1
+                        token_ids = token_ids[:keep]
+                        selected_token_count += int(covered[len(token_ids) - 1])
                     if not token_ids:
                         continue
-                    selected_token_count += len(token_ids)
 
                 row: dict[str, object] = {TOKEN_IDS_COLUMN: token_ids}
                 yield row

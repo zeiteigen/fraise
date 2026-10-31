@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 
 
@@ -35,3 +36,11 @@ class PackedTokenBatch:
             self.target_mask.pin_memory(),
             self.sources,
         )
+
+
+def target_units(batch: PackedTokenBatch, unit_lengths: np.ndarray | None) -> int:
+    """Budget units of a CPU batch: base tokens covered by its valid targets."""
+    if unit_lengths is None:
+        return int(batch.target_mask.sum().item())
+    targets = batch.targets[batch.target_mask].numpy()
+    return int(unit_lengths[targets].sum())

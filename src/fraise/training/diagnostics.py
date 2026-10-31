@@ -8,7 +8,9 @@ from .events import emit
 
 
 class TrainingDiagnostics:
-    def __init__(self, runtime, state, interval, log, *, on_event=None):
+    def __init__(
+        self, runtime, state, interval, log, *, on_event=None, total_tokens=None
+    ):
         self.runtime = runtime
         self.interval = interval
         self.log = log
@@ -19,6 +21,7 @@ class TrainingDiagnostics:
         self.reported_step = state.global_step
         self.latest = None
         self.on_event = on_event
+        self.total_tokens = total_tokens
 
     def record(self, state, loss, gradient_norm, validation):
         self.latest = (loss, gradient_norm)
@@ -60,7 +63,9 @@ class TrainingDiagnostics:
                 global_step=state.global_step,
                 epoch=state.epoch + (1 if state.epoch_valid_tokens else 0),
                 tokens_seen=state.tokens_seen,
-                total_tokens=self.runtime.settings.max_train_tokens
+                total_tokens=self.total_tokens
+                if self.total_tokens is not None
+                else self.runtime.settings.max_train_tokens
                 * self.runtime.settings.num_epochs,
                 loss=loss,
                 gradient_norm=norm,

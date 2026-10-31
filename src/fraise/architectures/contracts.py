@@ -72,3 +72,11 @@ class ArchitectureSpec:
     optimizer_layout: Callable[[ModelProtocol], OptimizerLayout]
     label: str
     example_config: Mapping[str, object]
+    # Optional: reject an incompatible tokenizer before data preparation.
+    check_tokenizer: Callable[[ModelConfigProtocol, Any], None] | None = None
+    # Optional: copy tokenizer structure (e.g. macro decompositions) into a model.
+    bind_tokenizer: Callable[[ModelProtocol, Any], None] | None = None
+    # Optional: named parameter groups that sum to count_parameters(config).
+    parameter_breakdown: Callable[[ModelConfigProtocol], Mapping[str, int]] | None = (
+        None
+    )

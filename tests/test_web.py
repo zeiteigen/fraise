@@ -36,14 +36,14 @@ class WebTests(unittest.TestCase):
         (self.root / "tokenizers").mkdir()
         self.tokenizer.save(str(self.root / "tokenizers" / "tiny.json"))
         self.config = tiny_config()
-        counts = {name: 4 if name == "babylm" else 0 for name in SOURCE_NAMES}
+        counts = {name: 4 if name == "fineweb-edu" else 0 for name in SOURCE_NAMES}
         self.settings = tiny_settings(
             dataset_token_counts=counts,
             use_compile=False,
             max_validation_tokens=0,
             log_interval_steps=1,
         )
-        self.data = TrainingData({"babylm": tiny_data().train["fixture"]}, None)
+        self.data = TrainingData({"fineweb-edu": tiny_data().train["fixture"]}, None)
         for name in ("first", "second"):
             pretrain_model(
                 self.tokenizer,
@@ -307,7 +307,7 @@ from datasets import Dataset
 from fraise.data.types import TrainingData
 from fraise.cli import train
 train.load_training_data = lambda *a, **k: TrainingData(
-    {'babylm': Dataset.from_dict({'text': ['a b c d e']})}, None)
+    {'fineweb-edu': Dataset.from_dict({'text': ['a b c d e']})}, None)
 train.main()
 """
 

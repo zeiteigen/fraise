@@ -10,9 +10,11 @@ _architectures: dict[str, ArchitectureSpec] = {}
 
 def _load_builtin() -> None:
     if "transformer" not in _architectures:
+        from .hierarchical import FRAISE
         from .transformer import TRANSFORMER
 
         _architectures[TRANSFORMER.id] = TRANSFORMER
+        _architectures[FRAISE.id] = FRAISE
 
 
 def register_architecture(spec: ArchitectureSpec) -> None:

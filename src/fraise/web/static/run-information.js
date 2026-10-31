@@ -9,6 +9,9 @@ export function renderRunInformation(root, run, checkpoint, device) {
     return;
   }
   const validation = Array.isArray(run.validation) ? run.validation[1] : run.validation?.loss;
+  // Bits per byte is comparable across tokenizers; token losses are not.
+  const scored = (run.validation_results || []).filter(result => result.bits_per_byte != null);
+  const bitsPerByte = scored.length ? scored[scored.length - 1].bits_per_byte : null;
   const values = [
     ['Run', run.name || run.id], ['Checkpoint', checkpoint?.label || 'Unavailable'],
     ['Architecture', run.architecture], ['Parameters', numeric(run.parameter_count)],
@@ -16,6 +19,7 @@ export function renderRunInformation(root, run, checkpoint, device) {
     ['Vocabulary', `${numeric(run.tokenizer?.vocab_size)} tokens`],
     ['Checkpoint step', numeric(checkpoint?.step)], ['Run training tokens', numeric(run.tokens_seen)],
     ['Latest validation loss', validation == null ? '—' : formatNumber(validation, 4)],
+    ['Latest validation bits/byte', bitsPerByte == null ? '—' : formatNumber(bitsPerByte, 4)],
     ['Device', device?.resolved?.toUpperCase() || '—'],
   ];
   const description = element('dl', 'info-grid');

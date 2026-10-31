@@ -41,6 +41,53 @@ def create_tokenizer(
         "min_frequency": MIN_FREQUENCY,
         "max_bytes_per_source": max_bytes_per_source,
     }
+    return _create_artifact(
+        directory,
+        request,
+        f"fraise-{vocab_size}",
+        lambda: train_tokenizer(
+            sources, vocab_size, max_bytes_per_source=max_bytes_per_source
+        ),
+    )
+
+
+def create_macro_tokenizer(
+    base,
+    sources,
+    vocab_size: int,
+    directory: Path,
+    *,
+    max_macro_length: int,
+    max_bytes_per_source=None,
+):
+    """Train or reuse macro merges over ``base``; returns the artifact path."""
+    from .macro_training import train_macro_tokenizer
+
+    request = {
+        "kind": "macro",
+        "base_tokenizer_sha256": tokenizer_fingerprint(base),
+        "dataset_fingerprint": dataset_fingerprint(sources),
+        "sources": list(sources),
+        "vocab_size": vocab_size,
+        "max_macro_length": max_macro_length,
+        "min_frequency": MIN_FREQUENCY,
+        "max_bytes_per_source": max_bytes_per_source,
+    }
+    return _create_artifact(
+        directory,
+        request,
+        f"fraise-macro-{vocab_size}",
+        lambda: train_macro_tokenizer(
+            base,
+            sources,
+            vocab_size,
+            max_macro_length=max_macro_length,
+            max_bytes_per_source=max_bytes_per_source,
+        ),
+    )
+
+
+def _create_artifact(directory: Path, request: dict, prefix: str, train):
     key = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()[:16]
     directory.mkdir(parents=True, exist_ok=True)
     with FileLock(str(directory / ".metadata.lock")):
@@ -53,10 +100,8 @@ def create_tokenizer(
                 tokenizer = load_tokenizer(path)
                 if tokenizer_fingerprint(tokenizer) == record["tokenizer_sha256"]:
                     return path
-        tokenizer = train_tokenizer(
-            sources, vocab_size, max_bytes_per_source=max_bytes_per_source
-        )
-        path = directory / f"fraise-{vocab_size}-{key}.json"
+        tokenizer = train()
+        path = directory / f"{prefix}-{key}.json"
         atomic_write(path, lambda handle: handle.write(tokenizer.to_str()))
         record = {
             "schema_version": SCHEMA_VERSION,

@@ -27,7 +27,7 @@ def training_defaults():
                 "num_epochs": 1,
                 "max_train_tokens": 32768,
                 "dataset_token_counts": {
-                    name: 32768 if name == "babylm" else 0 for name in SOURCE_NAMES
+                    name: 32768 if name == "fineweb-edu" else 0 for name in SOURCE_NAMES
                 },
                 "sequence_length": 128,
                 "use_compile": False,

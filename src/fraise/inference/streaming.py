@@ -28,7 +28,24 @@ def iter_generate(
     generator=None,
     cancelled=lambda: False,
 ):
-    """Snapshots replace earlier text, including incomplete byte sequences."""
+    """Snapshots replace earlier text, including incomplete byte sequences.
+
+    Hierarchical models generate base tokens; ``ids`` then holds base IDs, which
+    are also valid macro IDs for decoding, and token counts are base tokens.
+    """
+    if getattr(model, "hierarchical", False):
+        yield from _iter_generate_hierarchical(
+            model,
+            tokenizer,
+            prompt,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            generator=generator,
+            cancelled=cancelled,
+        )
+        return
     validate_sampling(max_new_tokens, temperature, top_k, top_p)
     ids = prompt_ids(tokenizer, prompt)
     initial = len(ids)
@@ -62,3 +79,17 @@ def iter_generate(
             return
     if max_new_tokens == 0:
         yield snapshot("length")
+
+
+def _iter_generate_hierarchical(model, tokenizer, prompt, **options):
+    from .hierarchical import iter_generate_base_tokens
+
+    for step in iter_generate_base_tokens(model, tokenizer, prompt, **options):
+        initial = len(step.base_ids) - step.generated_tokens
+        yield GenerationStep(
+            step.base_ids,
+            tokenizer.decode(step.base_ids[1:], skip_special_tokens=True),
+            tokenizer.decode(step.base_ids[initial:], skip_special_tokens=True),
+            step.generated_tokens,
+            step.finished,
+        )

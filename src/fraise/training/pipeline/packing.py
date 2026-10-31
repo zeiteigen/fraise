@@ -4,9 +4,14 @@ Documents are read straight from Arrow buffers as NumPy arrays; windows are
 strided views of that stream. Window ``w`` always starts at stream offset
 ``w * stride``, so a resumed epoch can start at any window without packing
 the windows before it.
+
+Macro-token streams measure budgets in base-token *units*: a window's units are
+the decomposition lengths of its target macros. Their final window keeps the
+fewest targets that reach the budget, so planned budgets are exact unit counts.
 """
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 import numpy as np
 import pyarrow as pa
@@ -94,6 +99,130 @@ class _TokenStream:
         return values[offset : offset + stop - start]
 
 
+@dataclass(frozen=True)
+class WindowPlan:
+    """How many windows a budget needs and the exact units they produce."""
+
+    windows: int
+    units: int
+
+
+def _stream(split: Dataset, seed: int, shuffle: bool) -> _TokenStream:
+    column = _token_column(split)
+    order = np.random.default_rng(seed).permutation(len(column)) if shuffle else None
+    return _TokenStream(column, order)
+
+
+def _window_rows(stream, sequence_length, packing_stride, start_window=0):
+    """Full windows from ``start_window`` as ``(first_index, rows)`` chunks."""
+    full_windows = _full_window_count(stream.length, sequence_length, packing_stride)
+    window_span = sequence_length + 1
+    window = start_window
+    while window < full_windows:
+        count = min(full_windows - window, max(1, _GATHER_ELEMENTS // window_span))
+        start = window * packing_stride
+        tokens = stream.tokens(
+            start, start + (count - 1) * packing_stride + window_span
+        )
+        rows = np.lib.stride_tricks.sliding_window_view(tokens, window_span)
+        yield window, rows[::packing_stride]
+        window += count
+
+
+def _tail(stream, sequence_length, packing_stride) -> np.ndarray:
+    """Tokens of the final partial window (inputs and targets), possibly empty."""
+    full_windows = _full_window_count(stream.length, sequence_length, packing_stride)
+    tail_start = full_windows * packing_stride
+    if stream.length - tail_start < 2:
+        return np.empty(0, dtype=np.int64)
+    return stream.tokens(tail_start, stream.length)
+
+
+def _targets_reaching(units: np.ndarray, needed: int) -> tuple[int, int]:
+    """Fewest leading targets whose units reach ``needed``, and those units."""
+    covered = np.cumsum(units)
+    count = int(np.searchsorted(covered, needed)) + 1
+    count = min(count, len(units))
+    return count, int(covered[count - 1]) if count else 0
+
+
+def plan_unit_windows(
+    split: Dataset,
+    sequence_length: int,
+    packing_stride: int,
+    budget: int | None,
+    unit_lengths: np.ndarray,
+    *,
+    seed: int = 0,
+    shuffle: bool = False,
+) -> WindowPlan:
+    """Scan a macro stream; with too little data ``units`` is the capacity."""
+    _check_geometry(sequence_length, packing_stride)
+    stream = _stream(split, seed, shuffle)
+    budget = float("inf") if budget is None else budget
+    produced = windows = 0
+    for first, rows in _window_rows(stream, sequence_length, packing_stride):
+        sums = unit_lengths[rows[:, 1:]].sum(axis=1)
+        cumulative = produced + np.cumsum(sums)
+        hit = int(np.searchsorted(cumulative, budget))
+        if hit < len(rows):
+            before = int(cumulative[hit - 1]) if hit else produced
+            _, units = _targets_reaching(unit_lengths[rows[hit, 1:]], budget - before)
+            return WindowPlan(first + hit + 1, before + units)
+        produced, windows = int(cumulative[-1]), first + len(rows)
+    tail = _tail(stream, sequence_length, packing_stride)
+    if len(tail) and produced < budget:
+        _, units = _targets_reaching(unit_lengths[tail[1:]], budget - produced)
+        produced, windows = produced + units, windows + 1
+    return WindowPlan(windows, produced)
+
+
+def _units_before(stream, sequence_length, packing_stride, start_window, unit_lengths):
+    produced = 0
+    for first, rows in _window_rows(stream, sequence_length, packing_stride):
+        rows = rows[: start_window - first]
+        produced += int(unit_lengths[rows[:, 1:]].sum())
+        if first + len(rows) >= start_window:
+            break
+    return produced
+
+
+def _iter_unit_blocks(
+    stream,
+    sequence_length,
+    packing_stride,
+    pad_token_id,
+    budget,
+    start_window,
+    unit_lengths,
+):
+    budget = float("inf") if budget is None else budget
+    produced = _units_before(
+        stream, sequence_length, packing_stride, start_window, unit_lengths
+    )
+    if produced >= budget:
+        return
+    full_mask = torch.ones(sequence_length, dtype=torch.bool)
+    for _, rows in _window_rows(stream, sequence_length, packing_stride, start_window):
+        units = unit_lengths[rows[:, 1:]]
+        for row, row_units in zip(rows, units):
+            total = int(row_units.sum())
+            if produced + total >= budget:
+                count, _ = _targets_reaching(row_units, budget - produced)
+                yield _make_block(row, sequence_length, pad_token_id, count)
+                return
+            row = torch.from_numpy(row.astype(np.int64))
+            yield PackedTokenBatch(row[:-1], row[1:], full_mask)
+            produced += total
+    full_windows = _full_window_count(stream.length, sequence_length, packing_stride)
+    if start_window > full_windows or produced >= budget:
+        return
+    tail = _tail(stream, sequence_length, packing_stride)
+    if len(tail):
+        count, _ = _targets_reaching(unit_lengths[tail[1:]], budget - produced)
+        yield _make_block(tail, sequence_length, pad_token_id, count)
+
+
 def _make_block(
     tokens: np.ndarray,
     sequence_length: int,
@@ -119,6 +248,7 @@ def iter_packed_blocks(
     shuffle: bool,
     max_tokens: int | None,
     start_window: int = 0,
+    unit_lengths: np.ndarray | None = None,
 ) -> Iterator[PackedTokenBatch]:
     """Yield fixed-context causal-LM windows from a Hugging Face dataset.
 
@@ -126,11 +256,21 @@ def iter_packed_blocks(
     document boundaries, but they do not prevent attention across adjacent
     documents because Fraise's model uses ordinary causal attention. With
     ``shuffle`` the document order matches ``split.shuffle(seed=seed)``.
+    With ``unit_lengths`` the budget counts base-token units of macro targets.
     """
     _check_geometry(sequence_length, packing_stride)
-    column = _token_column(split)
-    order = np.random.default_rng(seed).permutation(len(column)) if shuffle else None
-    stream = _TokenStream(column, order)
+    stream = _stream(split, seed, shuffle)
+    if unit_lengths is not None:
+        yield from _iter_unit_blocks(
+            stream,
+            sequence_length,
+            packing_stride,
+            pad_token_id,
+            max_tokens,
+            start_window,
+            unit_lengths,
+        )
+        return
     full_windows = _full_window_count(stream.length, sequence_length, packing_stride)
     budget = max_tokens if max_tokens is not None else float("inf")
     window_span = sequence_length + 1

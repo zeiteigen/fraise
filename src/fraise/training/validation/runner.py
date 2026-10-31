@@ -15,6 +15,7 @@ class ValidationRunner:
         *,
         on_update=None,
         stop_requested=None,
+        measures=None,
     ):
         self.process = None
         self.queue = None
@@ -25,7 +26,9 @@ class ValidationRunner:
         elif split is None:
             log("Validation disabled: no held-out split.")
         else:
-            self.process = ValidationProcess(config, split, settings, pad_id, log)
+            self.process = ValidationProcess(
+                config, split, settings, pad_id, log, measures
+            )
             self.queue = ValidationQueue(
                 self.process.submit,
                 log,

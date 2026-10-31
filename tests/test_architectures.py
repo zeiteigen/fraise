@@ -319,7 +319,7 @@ class ArchitectureTests(unittest.TestCase):
                 actual = process.submit(
                     2, Path(directory) / "tiny" / "checkpoint_step_00000002.pt"
                 ).result(timeout=40)
-                self.assertAlmostEqual(actual, expected)
+                self.assertAlmostEqual(actual["loss"], expected)
                 self.assertTrue(
                     any("Validation worker ready" in message for message in messages)
                 )

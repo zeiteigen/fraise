@@ -108,13 +108,13 @@ class ValidationQueue:
                         self._reset()
                         return False
                     try:
-                        loss = job.future.result(timeout=0.1)
+                        result = job.future.result(timeout=0.1)
                         break
                     except TimeoutError:
                         if job.future.done():
                             raise
             else:
-                loss = job.future.result()
+                result = job.future.result()
         except ValidationTimeout as exc:
             self._failure(
                 job.step, str(exc), "timed out", monotonic() - job.submitted_at
@@ -125,12 +125,18 @@ class ValidationQueue:
             self._reset()
         else:
             elapsed = monotonic() - job.submitted_at
+            # Evaluators return a loss or a score mapping with "loss" and extras.
+            scores = dict(result) if isinstance(result, dict) else {"loss": result}
+            loss = scores.pop("loss", None)
             self.results.append(
                 {
                     "step": job.step,
                     "status": "completed" if loss is not None else "unavailable",
                     "loss": loss,
                     "elapsed_seconds": elapsed,
+                    **{
+                        key: value for key, value in scores.items() if value is not None
+                    },
                 }
             )
             if loss is None:
@@ -139,8 +145,11 @@ class ValidationQueue:
                 )
             else:
                 self.latest = (job.step, loss)
+                bpb = scores.get("bits_per_byte")
                 self._log(
-                    f"Validation loss at global step {job.step}: {loss:.6f} ({elapsed:.1f}s)."
+                    f"Validation loss at global step {job.step}: {loss:.6f}"
+                    + (f", {bpb:.6f} bits/byte" if bpb is not None else "")
+                    + f" ({elapsed:.1f}s)."
                 )
         self._active = None
         if self._queued is not None:

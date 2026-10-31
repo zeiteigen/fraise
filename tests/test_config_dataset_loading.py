@@ -31,12 +31,12 @@ class DatasetSelectionTests(unittest.TestCase):
         with (
             TemporaryDirectory() as root,
             patch.object(loading, "load_stream", side_effect=fake_stream),
-            patch.object(loading, "load_babylm") as baby,
         ):
             result = loading.load_training_data(
                 counts, tiny_tokenizer(), root=Path(root)
             )
-        baby.assert_not_called()
+        self.assertNotIn("babylm", SOURCE_NAMES)
+        self.assertEqual(result.train.keys(), {"cosmopedia-khanacademy"})
         self.assertIs(result.train["cosmopedia-khanacademy"], train)
         self.assertIs(result.validation, validation)
 
@@ -62,18 +62,25 @@ class DatasetSelectionTests(unittest.TestCase):
         self.assertEqual(calls["cosmopedia-stories"]["size_gb"], 0.1)
 
     def test_preview_skips_validation_loading(self):
-        counts = {"babylm": 4}
+        counts = {"cosmopedia-stories": 4}
         with (
             TemporaryDirectory() as root,
             patch.object(
-                loading, "load_babylm", return_value=Dataset.from_dict({"text": ["a"]})
-            ),
-            patch.object(loading, "load_stream") as stream,
+                loading,
+                "load_stream",
+                return_value=TrainingData(
+                    {"cosmopedia-stories": Dataset.from_dict({"text": ["a"]})}
+                ),
+            ) as stream,
         ):
             result = loading.load_training_data(
                 counts, tiny_tokenizer(), root=Path(root), validation=False
             )
-        stream.assert_not_called()
+        self.assertEqual(
+            [call.args[0].name for call in stream.call_args_list],
+            ["cosmopedia-stories"],
+        )
+        self.assertFalse(stream.call_args.kwargs["include_validation"])
         self.assertIsNone(result.validation)
 
     def test_json_and_direct_configuration_have_identical_defaults(self):

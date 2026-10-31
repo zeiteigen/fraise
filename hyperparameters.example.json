@@ -11,8 +11,7 @@
   "sequence_length": 512,
   "max_train_tokens": 524288,
   "dataset_token_counts": {
-    "babylm": 524288,
-    "fineweb-edu": 0,
+    "fineweb-edu": 524288,
     "cosmopedia-khanacademy": 0,
     "cosmopedia-stories": 0
   },

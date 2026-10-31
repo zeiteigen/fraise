@@ -12,8 +12,9 @@ from .worker import evaluate_checkpoint, init_validation_worker
 
 
 class ValidationProcess:
-    def __init__(self, config, split, settings, pad_id, log):
+    def __init__(self, config, split, settings, pad_id, log, measures=None):
         self._arguments = (config, split, settings, pad_id, os.getpid())
+        self._measures = measures
         self._architecture = get_architecture(config.architecture)
         self._timeout = settings.validation_timeout_seconds
         self._log = log
@@ -30,7 +31,7 @@ class ValidationProcess:
             max_workers=1,
             mp_context=context,
             initializer=init_validation_worker,
-            initargs=(*self._arguments, sender, self._architecture),
+            initargs=(*self._arguments, sender, self._architecture, self._measures),
         )
         self._listener = Thread(
             target=self._relay,
