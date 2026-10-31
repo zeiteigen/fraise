@@ -5,7 +5,7 @@ from collections import defaultdict
 
 import torch
 
-from fraise.model.mha import MultiHeadAttention
+from fraise.architectures import OptimizerLayout
 
 # Identity recorded in run manifests. Bump it whenever update semantics change so
 # runs started under the old rules are not silently resumed under the new ones.
@@ -119,17 +119,20 @@ class BlockMuon(torch.optim.Optimizer):
 class MuonWithAdamW(torch.optim.Optimizer):
     """Expose both optimizers to a single scheduler and checkpoint store."""
 
-    def __init__(self, model, settings):
-        hidden_matrices = {
-            parameter
-            for parameter in model.transformer.parameters()
-            if parameter.ndim == 2
-        }
-        row_blocks = {
-            module.qkv_projection.weight: (module.q_size, module.k_size, module.v_size)
-            for module in model.modules()
-            if isinstance(module, MultiHeadAttention)
-        }
+    def __init__(self, model, settings, *, layout: OptimizerLayout | None = None):
+        if layout is None:
+            from fraise.architectures.transformer import optimizer_layout
+            from fraise.model.model import FraiseModel
+
+            if not isinstance(model, FraiseModel):
+                raise TypeError("non-transformer models require an optimizer layout")
+            layout = optimizer_layout(model)
+        hidden_matrices = layout.muon_parameters
+        parameters = set(model.parameters())
+        if hidden_matrices - parameters:
+            raise ValueError("Muon layout contains parameters outside the model")
+        if layout.row_blocks.keys() - hidden_matrices:
+            raise ValueError("row blocks require a Muon parameter")
         muon_params, decay_params, no_decay_params = [], [], []
         # parameters() deduplicates shared embedding/output weights.
         for parameter in model.parameters():
@@ -149,7 +152,7 @@ class MuonWithAdamW(torch.optim.Optimizer):
             nesterov=settings.muon_nesterov,
             ns_steps=settings.muon_ns_steps,
             weight_decay=settings.weight_decay,
-            row_blocks=row_blocks,
+            row_blocks=layout.row_blocks,
         )
         self.adamw = torch.optim.AdamW(
             [

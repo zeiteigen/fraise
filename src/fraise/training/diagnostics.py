@@ -4,9 +4,11 @@ from time import monotonic
 
 import torch
 
+from .events import emit
+
 
 class TrainingDiagnostics:
-    def __init__(self, runtime, state, interval, log):
+    def __init__(self, runtime, state, interval, log, *, on_event=None):
         self.runtime = runtime
         self.interval = interval
         self.log = log
@@ -16,6 +18,7 @@ class TrainingDiagnostics:
         self.wait_seconds = 0.0
         self.reported_step = state.global_step
         self.latest = None
+        self.on_event = on_event
 
     def record(self, state, loss, gradient_norm, validation):
         self.latest = (loss, gradient_norm)
@@ -50,6 +53,19 @@ class TrainingDiagnostics:
                 f"peak allocated {torch.cuda.max_memory_allocated(device) / 2**20:.1f} MiB"
             )
         self.log(message)
+        if self.on_event is not None:
+            emit(
+                self.on_event,
+                "progress",
+                global_step=state.global_step,
+                epoch=state.epoch + (1 if state.epoch_valid_tokens else 0),
+                tokens_seen=state.tokens_seen,
+                total_tokens=self.runtime.settings.max_train_tokens
+                * self.runtime.settings.num_epochs,
+                loss=loss,
+                gradient_norm=norm,
+                tokens_per_second=rate,
+            )
         self.started = now
         self.tokens = state.tokens_seen
         self.compilation_seconds = self.runtime.compilation_seconds

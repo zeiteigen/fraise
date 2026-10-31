@@ -41,13 +41,15 @@ class IncrementalDecoder:
             return logits_for_context(self.model, token_ids)
         if self.cache is None:
             self.cache = self.model.new_cache()
+        if self.cache is None:
+            return logits_for_context(self.model, token_ids)
         new = token_ids[len(self.cache) :]
         inputs = torch.tensor([new], dtype=torch.long, device=self.device)
         with torch.inference_mode():
             return self.model(inputs, cache=self.cache, last_only=True)[0, -1]
 
 
-def sample_token(logits, temperature, top_k, top_p):
+def sample_token(logits, temperature, top_k, top_p, *, generator=None):
     if temperature == 0:
         return int(logits.argmax().item())
     logits = logits / temperature
@@ -60,7 +62,18 @@ def sample_token(logits, temperature, top_k, top_p):
         remove[1:] = remove[:-1].clone()
         remove[0] = False
         logits = logits.scatter(0, indices, values.masked_fill(remove, float("-inf")))
-    return int(torch.multinomial(logits.softmax(-1), 1).item())
+    return int(torch.multinomial(logits.softmax(-1), 1, generator=generator).item())
+
+
+def validate_sampling(max_new_tokens, temperature, top_k, top_p):
+    integer("max_new_tokens", max_new_tokens, 0)
+    number("temperature", temperature, inclusive=True)
+    if top_k is not None:
+        integer("top_k", top_k)
+    if top_p is not None:
+        number("top_p", top_p)
+        if top_p > 1:
+            raise ValueError("top_p must be <= 1")
 
 
 def generate(
@@ -72,21 +85,19 @@ def generate(
     temperature=0.0,
     top_k=None,
     top_p=0.95,
+    generator=None,
 ):
-    integer("max_new_tokens", max_new_tokens, 0)
-    number("temperature", temperature, inclusive=True)
-    if top_k is not None:
-        integer("top_k", top_k)
-    if top_p is not None:
-        number("top_p", top_p)
-        if top_p > 1:
-            raise ValueError("top_p must be <= 1")
-    ids = prompt_ids(tokenizer, prompt)
-    eos = special_token_id(tokenizer, "<|eos|>")
-    decoder = IncrementalDecoder(model)
-    for _ in range(max_new_tokens):
-        token_id = sample_token(decoder.logits(ids), temperature, top_k, top_p)
-        ids.append(token_id)
-        if token_id == eos:
-            break
-    return tokenizer.decode(ids[1:], skip_special_tokens=True), ids
+    from .streaming import iter_generate
+
+    for step in iter_generate(
+        model,
+        tokenizer,
+        prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        generator=generator,
+    ):
+        pass
+    return step.text, step.ids

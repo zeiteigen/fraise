@@ -1,14 +1,15 @@
-"""Train the Fraise transformer over the prepared epoch plan."""
+"""Train a registered language model over the prepared epoch plan."""
 
 from pathlib import Path
 
 from fraise.config.compatibility import check_compatibility
-from fraise.config.model import ModelConfig
+from fraise.architectures import ModelConfigProtocol
 from fraise.config.training import TrainingSettings
 from fraise.data.types import TrainingData
 from fraise.tokenizer.loading import special_token_id
 
 from .diagnostics import TrainingDiagnostics
+from .events import emit
 from .pipeline.batches import iter_dataset_packed_batches
 from .pipeline.prefetch import prefetch_batches
 from .pipeline.preparation import prepare_data
@@ -19,17 +20,19 @@ from .runtime import build_runtime, resolve_device
 from .validation.runner import ValidationRunner
 
 
-def pretrain_transformer(
+def pretrain_model(
     tokenizer,
     dataset: TrainingData,
     settings: TrainingSettings,
-    model_config: ModelConfig,
+    model_config: ModelConfigProtocol,
     save_path: str | Path,
     model_name="fraise_model",
     *,
     resume_from: str | Path | None = None,
     config_paths: dict[str, Path] | None = None,
     device=None,
+    stop_requested=None,
+    on_event=None,
 ):
     check_compatibility(tokenizer, model_config, settings)
     save_path = Path(save_path)
@@ -38,7 +41,11 @@ def pretrain_transformer(
     manifest = run_manifest(dataset, tokenizer, model_config, settings, device)
     # Reject a reused run name or a mismatched resume before tokenizing and compiling.
     inspect_run_destination(save_path, model_name, manifest, resume_from)
+    emit(on_event, "stage", phase="preparing")
     prepared = prepare_data(dataset, tokenizer, settings)
+    if stop_requested is not None and stop_requested():
+        emit(on_event, "stopped", phase="preparing")
+        return None
     pad_id = special_token_id(tokenizer, "<|pad|>")
     runtime = build_runtime(
         model_config,
@@ -56,9 +63,12 @@ def pretrain_transformer(
         settings,
         resume_from=resume_from,
         config_paths=config_paths,
+        on_event=on_event,
     )
     state = run.restore(runtime)
     runtime.log = run.log
+    run.artifacts.update(training_status="running")
+    emit(on_event, "stage", phase="training")
     total_train_tokens = settings.max_train_tokens * settings.num_epochs
     run.log(
         f"Training {settings.max_train_tokens:,} targets per epoch for {settings.num_epochs} "
@@ -79,11 +89,15 @@ def pretrain_transformer(
         pad_id,
         run.log,
         on_update=run.record_validation,
+        stop_requested=stop_requested,
     ) as validation:
         diagnostics = TrainingDiagnostics(
-            runtime, state, settings.log_interval_steps, run.log
+            runtime, state, settings.log_interval_steps, run.log, on_event=on_event
         )
         for epoch in range(state.epoch, settings.num_epochs):
+            if stop_requested is not None and stop_requested():
+                run.stop(runtime, state, validation)
+                return runtime.model
             epoch_targets = sum(prepared.budgets[epoch].values())
             runtime.model.train()
             batches = iter_dataset_packed_batches(
@@ -103,8 +117,16 @@ def pretrain_transformer(
             for batch_index, batch in prefetch_batches(
                 batches, pin_memory=runtime.device.type == "cuda"
             ):
+                if stop_requested is not None and stop_requested():
+                    run.stop(runtime, state, validation)
+                    return runtime.model
                 loss, valid_tokens, grad_norm = runtime.step(batch)
                 state.record_step(batch_index, loss, valid_tokens)
+                if stop_requested is not None and stop_requested():
+                    diagnostics.record(state, loss, grad_norm, validation)
+                    diagnostics.report(state, validation)
+                    run.stop(runtime, state, validation)
+                    return runtime.model
                 if (
                     state.global_step % settings.checkpoint_interval_steps == 0
                     and state.epoch_valid_tokens < epoch_targets
@@ -140,5 +162,9 @@ def pretrain_transformer(
         # Ensure a resumed final-step checkpoint is validated in this session, too.
         if run.last_validation_step is None:
             run.checkpoint(runtime, state, validation)
-        run.finish(runtime, state, validation)
+        run.finish(runtime, state, validation, stop_requested=stop_requested)
     return runtime.model
+
+
+# Retain the original Python/notebook entry point.
+pretrain_transformer = pretrain_model

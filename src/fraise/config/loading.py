@@ -1,13 +1,13 @@
 """Read configuration JSON into the authoritative normalized definitions."""
 
+from fraise.architectures import ModelConfigProtocol, model_config_from_dict
 from fraise.io import read_json
 
-from .model import ModelConfig
 from .training import TrainingSettings
 
 
-def load_model_config(path) -> ModelConfig:
-    return ModelConfig(**_read_values(path))
+def load_model_config(path) -> ModelConfigProtocol:
+    return model_config_from_dict(_read_values(path))
 
 
 def load_training_settings(path) -> TrainingSettings:

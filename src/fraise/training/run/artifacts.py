@@ -119,6 +119,7 @@ class RunArtifacts:
         save_model_state_dict(model.state_dict(), self.directory / name)
         self.update(
             training_finished=True,
+            training_status="completed",
             final_model_path=name,
             end_time=time.time(),
             training_state=state.as_checkpoint(),

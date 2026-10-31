@@ -16,11 +16,14 @@ class ModelConfig:
     num_layers: int
     max_seq_len: int = 2048
     tie_word_embeddings: bool = False
+    architecture: str = "transformer"
 
     def __post_init__(self):
         for field in fields(self):
-            if field.name != "tie_word_embeddings":
+            if field.name not in {"tie_word_embeddings", "architecture"}:
                 integer(field.name, getattr(self, field.name))
+        if self.architecture != "transformer":
+            raise ValueError("ModelConfig only supports architecture 'transformer'")
         if type(self.tie_word_embeddings) is not bool:
             raise TypeError("tie_word_embeddings must be a bool")
         if self.qk_dim % 2:

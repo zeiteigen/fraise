@@ -6,6 +6,7 @@ from dataclasses import asdict, fields
 
 import torch
 
+from fraise.architectures import model_config_from_dict
 from fraise.config.training import TrainingSettings
 from fraise.data.provenance import describe_dataset
 from fraise.helpers.get_git_commit import get_git_snapshot
@@ -103,6 +104,9 @@ def check_resume_identity(saved: dict, current: dict):
         if name == "training":
             previous = _training_identity(previous)
             current = _training_identity(current)
+        elif name == "model_config":
+            previous = asdict(model_config_from_dict(previous))
+            current = asdict(model_config_from_dict(current))
         if previous != current:
             raise ValueError(f"resume {name} does not match the saved run")
 

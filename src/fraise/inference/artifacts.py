@@ -6,9 +6,13 @@ from pathlib import Path
 import torch
 from tokenizers import Tokenizer
 
-from fraise.config.model import ModelConfig
+from fraise.architectures import (
+    ModelConfigProtocol,
+    ModelProtocol,
+    build_model,
+    model_config_from_dict,
+)
 from fraise.io import read_json
-from fraise.model.model import FraiseModel
 from fraise.tokenizer.loading import load_tokenizer, tokenizer_fingerprint
 from fraise.training.run.artifacts import META_FILE_NAME, resolve_checkpoint
 from fraise.training.run.checkpoints import load_model_weights
@@ -16,9 +20,9 @@ from fraise.training.run.checkpoints import load_model_weights
 
 @dataclass
 class LoadedRun:
-    model: FraiseModel
+    model: ModelProtocol
     tokenizer: Tokenizer
-    config: ModelConfig
+    config: ModelConfigProtocol
     path: Path
 
 
@@ -35,7 +39,7 @@ def load_run(
     identity = (
         manifest["identity"] if manifest.get("manifest_version") == 2 else manifest
     )
-    config = ModelConfig(**identity["model_config"])
+    config = model_config_from_dict(identity["model_config"])
     tokenizer = load_tokenizer(directory / metadata["tokenizer_file"])
     if tokenizer.get_vocab_size() != config.vocab_size:
         raise ValueError("tokenizer/model vocabulary mismatch")
@@ -49,8 +53,10 @@ def load_run(
         path = directory / f"{metadata['model_name']}.pt"
     else:
         path = resolve_checkpoint(directory)
-    model = FraiseModel(config)
-    model.load_state_dict(load_model_weights(path))
+    model = build_model(config)
+    model.load_state_dict(
+        load_model_weights(path, migrate_legacy=config.architecture == "transformer")
+    )
     model.to(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     model.eval()
     return LoadedRun(model, tokenizer, config, path)

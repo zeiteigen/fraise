@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 npu = ["openvino>=2026.4"]
 notebooks = ["ipykernel>=7.3.0", "ipython>=9.17.1"]
+web = ["fastapi>=0.118.3,<1", "uvicorn>=0.37,<1", "httpx>=0.28,<1"]
 
 [project.scripts]
 create-tokenizer = "fraise.cli.create_tokenizer:main"
@@ -27,6 +28,7 @@ visualize-training-data = "fraise.cli.visualize_training_data:main"
 params = "fraise.cli.calculate_params:main"
 checkpoint-to-model = "fraise.cli.checkpoint_to_model:main"
 migrate-run = "fraise.cli.migrate_run:main"
+fraise-web = "fraise.cli.web:main"
 
 [build-system]
 requires = ["uv_build>=0.12.13,<0.13.0"]

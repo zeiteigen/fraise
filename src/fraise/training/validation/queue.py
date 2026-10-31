@@ -23,11 +23,20 @@ class ValidationQueue:
     enforce it.
     """
 
-    def __init__(self, submit, log, *, timeout_seconds=300, reset=lambda: None):
+    def __init__(
+        self,
+        submit,
+        log,
+        *,
+        timeout_seconds=300,
+        reset=lambda: None,
+        stop_requested=None,
+    ):
         self._submit = submit
         self._log = log
         self._timeout = timeout_seconds
         self._reset = reset
+        self._stop_requested = stop_requested or (lambda: False)
         self._active: ValidationJob | None = None
         self._queued: tuple[int, Path] | None = None
         self.latest: tuple[int, float] | None = None
@@ -58,6 +67,8 @@ class ValidationQueue:
 
     def queue(self, step, path):
         self.report()
+        if self._stop_requested():
+            return
         if self._queued is not None:
             self._log(
                 f"Validation queue full; training waiting before queuing global step {step}."
@@ -72,6 +83,8 @@ class ValidationQueue:
                     f"Validation queue wait: {waited:.3f}s "
                     f"(total {self.wait_seconds:.3f}s)."
                 )
+        if self._stop_requested():
+            return
         if self._active is None:
             self._start(step, path)
         else:
@@ -88,7 +101,20 @@ class ValidationQueue:
         if not wait and not job.future.done():
             return False
         try:
-            loss = job.future.result()
+            if wait:
+                while True:
+                    if self._stop_requested():
+                        self.cancel()
+                        self._reset()
+                        return False
+                    try:
+                        loss = job.future.result(timeout=0.1)
+                        break
+                    except TimeoutError:
+                        if job.future.done():
+                            raise
+            else:
+                loss = job.future.result()
         except ValidationTimeout as exc:
             self._failure(
                 job.step, str(exc), "timed out", monotonic() - job.submitted_at

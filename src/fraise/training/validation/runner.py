@@ -5,7 +5,17 @@ from .queue import ValidationQueue
 
 
 class ValidationRunner:
-    def __init__(self, config, split, settings, pad_id, log, *, on_update=None):
+    def __init__(
+        self,
+        config,
+        split,
+        settings,
+        pad_id,
+        log,
+        *,
+        on_update=None,
+        stop_requested=None,
+    ):
         self.process = None
         self.queue = None
         self._on_update = on_update
@@ -21,6 +31,7 @@ class ValidationRunner:
                 log,
                 timeout_seconds=settings.validation_timeout_seconds,
                 reset=self.process.stop,
+                stop_requested=stop_requested,
             )
             log(
                 f"Validation enabled: backend {settings.validation_device}, target budget {settings.max_validation_tokens}, "
@@ -48,6 +59,14 @@ class ValidationRunner:
                     validation_results=list(self.queue.results),
                 )
             self._recorded = len(self.queue.results)
+
+    def cancel(self):
+        """Cancel queued evaluation and promptly release its worker."""
+        if self.queue is not None:
+            self.queue.cancel()
+            self._persist()
+        if self.process is not None:
+            self.process.stop()
 
     def submit(self, step, path):
         if self.queue is not None:

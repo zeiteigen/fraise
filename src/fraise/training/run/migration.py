@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from fraise.config.model import ModelConfig
+from fraise.architectures import model_config_from_dict
 from fraise.config.training import TrainingSettings
 from fraise.io import atomic_write, read_json, write_json
 from fraise.tokenizer.loading import load_tokenizer, tokenizer_fingerprint
@@ -20,7 +20,7 @@ def migrate_run(directory: Path, data):
     old = metadata["manifest"]
     if old.get("manifest_version") == 2:
         return
-    config = ModelConfig(**old["model_config"])
+    config = model_config_from_dict(old["model_config"])
     settings = TrainingSettings.from_dict(old["training"])
     tokenizer = load_tokenizer(directory / metadata["tokenizer_file"])
     if tokenizer_fingerprint(tokenizer) != old["tokenizer"]["fingerprint"]:

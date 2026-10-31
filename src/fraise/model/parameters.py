@@ -1,26 +1,8 @@
-"""Count transformer parameters without allocating its weight tensors."""
+"""Count an architecture's parameters without allocating its weight tensors."""
 
-from fraise.config.model import ModelConfig
+from fraise.architectures import ModelConfigProtocol, get_architecture
 
 
-def estimate_parameter_count(config: ModelConfig) -> int:
+def estimate_parameter_count(config: ModelConfigProtocol) -> int:
     """Count model weights and biases from their configured dimensions."""
-    vocab_size = config.vocab_size
-    model_dim = config.residual_stream_dim
-    head_dim = config.head_dim
-    qk_dim = config.qk_dim
-    num_heads = config.num_heads
-    hidden_dim = config.swiglu_up_dim
-
-    # Tying shares the embedding weights; the LM head keeps its own bias.
-    weight_matrices = 1 if config.tie_word_embeddings else 2
-    embeddings_and_head = weight_matrices * vocab_size * model_dim + vocab_size
-
-    # Q, K, V, and output projections have no biases.
-    attention = 2 * model_dim * num_heads * (qk_dim + head_dim)
-
-    # SwiGLU has three biased linear layers; two layer norms each have a
-    # learned weight and bias. RoPE and max_seq_len add no parameters.
-    swiglu = 3 * model_dim * hidden_dim + 2 * hidden_dim + model_dim
-    layer_norms = 4 * model_dim
-    return embeddings_and_head + config.num_layers * (attention + swiglu + layer_norms)
+    return get_architecture(config.architecture).count_parameters(config)

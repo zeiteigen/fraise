@@ -5,6 +5,8 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from threading import Event, Thread
 
+from fraise.architectures import get_architecture
+
 from .deadline import timed_future
 from .worker import evaluate_checkpoint, init_validation_worker
 
@@ -12,6 +14,7 @@ from .worker import evaluate_checkpoint, init_validation_worker
 class ValidationProcess:
     def __init__(self, config, split, settings, pad_id, log):
         self._arguments = (config, split, settings, pad_id, os.getpid())
+        self._architecture = get_architecture(config.architecture)
         self._timeout = settings.validation_timeout_seconds
         self._log = log
         self.executor = None
@@ -27,7 +30,7 @@ class ValidationProcess:
             max_workers=1,
             mp_context=context,
             initializer=init_validation_worker,
-            initargs=(*self._arguments, sender),
+            initargs=(*self._arguments, sender, self._architecture),
         )
         self._listener = Thread(
             target=self._relay,

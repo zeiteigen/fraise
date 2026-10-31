@@ -10,6 +10,8 @@ from fraise.data.sources import SOURCE_NAMES
 from fraise.tokenizer.loading import load_tokenizer
 from fraise.training.run.artifacts import read_run_model_name
 from fraise.training.training import pretrain_transformer
+from fraise.training.events import EventWriter, emit
+from fraise.training.control import stop_signals
 
 from .common import add_data_dir, cli_errors
 
@@ -21,12 +23,26 @@ def main(argv=None):
     parser.add_argument("--tokenizer-file", type=Path, required=True)
     parser.add_argument("--model-name")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--device", choices=("cpu", "cuda"))
+    parser.add_argument(
+        "--stop-file", type=Path, help="save and stop when this file appears"
+    )
+    parser.add_argument(
+        "--events-file", type=Path, help="append structured progress JSON lines"
+    )
+    parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
     parser.add_argument(
         "--save-path", type=Path, help="run directory parent (default: DATA_DIR/models)"
     )
     add_data_dir(parser)
     args = parser.parse_args(argv)
-    with cli_errors(parser):
+    if args.parent_pid is not None:
+        from fraise.training.validation.worker_lifetime import exit_with_parent
+
+        exit_with_parent(args.parent_pid)
+    events = EventWriter(args.events_file) if args.events_file else None
+    with cli_errors(parser), stop_signals(args.stop_file, events) as on_event:
+        emit(on_event, "stage", phase="loading")
         name = args.model_name or (
             read_run_model_name(args.resume) if args.resume else None
         )
@@ -43,6 +59,9 @@ def main(argv=None):
             root=args.data_dir,
             validation=settings.max_validation_tokens != 0,
         )
+        if args.stop_file is not None and args.stop_file.exists():
+            emit(on_event, "stopped", phase="loading")
+            return
         pretrain_transformer(
             tokenizer,
             data,
@@ -55,6 +74,9 @@ def main(argv=None):
                 "training_hyperparameters": args.training_hyperparameters.expanduser(),
                 "model_config": args.model_config.expanduser(),
             },
+            device=args.device,
+            stop_requested=args.stop_file.exists if args.stop_file else None,
+            on_event=on_event,
         )
 
 

@@ -3,6 +3,7 @@
 from .artifacts import RunArtifacts
 from .checkpoints import CheckpointStore
 from .logging import RunLog
+from ..events import emit
 
 
 class RunLifecycle:
@@ -17,6 +18,7 @@ class RunLifecycle:
         *,
         resume_from=None,
         config_paths=None,
+        on_event=None,
     ):
         self.artifacts = RunArtifacts(
             root,
@@ -34,6 +36,7 @@ class RunLifecycle:
         self.log = RunLog(self.artifacts.directory)
         self.keep_last = settings.checkpoint_keep_last
         self.last_validation_step = None
+        self.on_event = on_event
         self.previous_validation_results = list(
             self.artifacts.metadata.get("validation_results", [])
         )
@@ -61,6 +64,12 @@ class RunLifecycle:
             validation_failures=self.previous_validation_failures + validation_failures,
             validation_results=self.previous_validation_results + validation_results,
         )
+        emit(
+            self.on_event,
+            "validation",
+            validation=validation,
+            validation_results=validation_results,
+        )
 
     def checkpoint(self, runtime, state, validation):
         path = self.checkpoints.save(
@@ -75,11 +84,33 @@ class RunLifecycle:
             tokens_seen=state.tokens_seen,
             training_state=state.as_checkpoint(),
         )
+        emit(self.on_event, "checkpoint", global_step=state.global_step, path=path.name)
         validation.report()
         self.checkpoints.prune(self.keep_last, validation.protected_paths)
 
-    def finish(self, runtime, state, validation):
+    def stop(self, runtime, state, validation):
+        """Persist a completed optimizer step without queuing more validation."""
+        validation.cancel()
+        path = self.checkpoints.save(
+            runtime.model, runtime.optimizer, runtime.scheduler, state
+        )
+        self.artifacts.update(
+            latest_checkpoint=path.name,
+            global_step=state.global_step,
+            tokens_seen=state.tokens_seen,
+            training_state=state.as_checkpoint(),
+            training_finished=False,
+            training_status="stopped",
+        )
+        self.checkpoints.prune(self.keep_last)
+        self.log(f"Training stopped at step {state.global_step}; saved {path.name}.")
+        emit(self.on_event, "stopped", global_step=state.global_step, path=path.name)
+
+    def finish(self, runtime, state, validation, *, stop_requested=None):
         validation.report(wait=True)
+        if stop_requested is not None and stop_requested():
+            self.stop(runtime, state, validation)
+            return
         self.checkpoints.prune(self.keep_last, validation.protected_paths)
         self.artifacts.finish(
             runtime.model,
@@ -88,3 +119,4 @@ class RunLifecycle:
             validation_failures=self.artifacts.metadata.get("validation_failures", []),
         )
         self.log("Training finished.")
+        emit(self.on_event, "completed", global_step=state.global_step)

@@ -5,6 +5,57 @@ base output vocabulary. The current implementation is the conventional
 byte-level BPE transformer baseline described in [PoC.md](PoC.md). Hierarchical
 composition, trie decoding, and dynamic decomposition remain experiment stages.
 
+## Local model workspace
+
+```sh
+uv sync --extra web
+uv run --extra web fraise-web
+```
+
+Open **http://127.0.0.1:8000**. The workspace has three views:
+
+- **Autocomplete:** edit a document and generate from the text before the cursor.
+  Review the streamed continuation, then accept it at the saved cursor position
+  or discard it. Accepting replaces any selected text and preserves the rest of
+  the document. Ctrl/Cmd+Enter generates, Tab accepts, and Escape discards; Enter
+  inserts a newline. The model receives raw text without roles or chat templates.
+  Inputs, checkpoint choices, and sampling settings can be restored from browser
+  storage. The inspector shows model dimensions, vocabulary, context limit,
+  checkpoint step, and validation information; generation reports speed and token counts.
+- **Compare:** send the same prompt, sampling settings, and seed to several
+  checkpoints. Outputs include generation speed, loading time, saved settings,
+  tokenizer identity, and available validation results. Validation loss depends
+  on tokenization and is not a direct comparison across different tokenizers.
+- **Train:** select an existing tokenizer, edit forms or complete JSON settings,
+  launch a new run, or resume a checkpoint. Progress, loss, and logs update live.
+  Stop saves a resumable checkpoint after the current optimizer step; preparation
+  can be canceled before training starts. A stopped run remains unfinished.
+
+The server binds to loopback and runs one compute operation at a time. Comparisons
+load models sequentially, and starting training releases the loaded inference
+model. This coordination covers jobs launched through this server. Training
+configuration snapshots, job events, and process logs live in `DATA_DIR/web/jobs`;
+models continue to use the normal run layout. Only operational settings can change
+when resuming. Existing legacy runs can be used for inference; older optimizer or
+manifest formats require migration or a fresh run before resuming.
+
+Use `--data-dir`, `--models-dir`, `--port`, and `--device auto|cpu|cuda` to select
+local storage and execution settings. The bundled training preset uses FP32,
+eager execution, one epoch, and a small token budget. Datasets are loaded through
+the same source loaders as the CLI and may download when not already cached.
+
+## Model architectures
+
+Model configuration JSON accepts `"architecture": "transformer"`. Omitting it
+selects the existing baseline, including when loading older runs. Architecture
+selection is shared by training, validation, inference, and parameter counting.
+
+The registry in `fraise.architectures` supplies configuration, construction,
+initialization, parameter-counting, and optimizer hooks. See
+[Adding an architecture](docs/architectures.md) for the contract and registration
+workflow. The first release registers the existing Transformer; additional PoC
+architectures remain separate experiments.
+
 ## Setup
 
 ```sh

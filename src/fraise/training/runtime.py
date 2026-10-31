@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import torch
 from transformers.optimization import get_cosine_schedule_with_warmup
 
+from fraise.architectures import ModelProtocol, build_model, get_architecture
 from fraise.config.training import TrainingSettings
-from fraise.model.model import FraiseModel
 
 from .batch import compile_loss_sum, token_loss_sum
 from .execution import configure_execution, deterministic_execution
@@ -19,7 +19,7 @@ from .run.rng import seed_everything
 
 @dataclass
 class TrainingRuntime:
-    model: FraiseModel
+    model: ModelProtocol
     optimizer: torch.optim.Optimizer
     scheduler: torch.optim.lr_scheduler.LRScheduler
     device: torch.device
@@ -101,15 +101,15 @@ def build_runtime(
         # TF32 tensor cores for FP32 matmuls; strict mode restores "highest" per step.
         torch.set_float32_matmul_precision("high")
     seed_everything(settings.seed)
-    model = FraiseModel(config)
-    if initialize_weights and config.tie_word_embeddings:
-        # Unit-scale embeddings make the residual stream predict its own token.
-        torch.nn.init.normal_(
-            model.token_embedding.weight, std=settings.tied_weight_init_std
-        )
+    architecture = get_architecture(config.architecture)
+    model = build_model(config)
+    if initialize_weights:
+        architecture.initialize(model, config, settings)
     model.to(device)
     # Compiling a loss function (not the module) keeps state-dict keys unchanged.
     loss_sum = compile_loss_sum() if settings.use_compile else token_loss_sum
-    optimizer = MuonWithAdamW(model, settings)
+    optimizer = MuonWithAdamW(
+        model, settings, layout=architecture.optimizer_layout(model)
+    )
     scheduler = get_cosine_schedule_with_warmup(optimizer, settings.warmup_steps, steps)
     return TrainingRuntime(model, optimizer, scheduler, device, settings, loss_sum)

@@ -45,7 +45,8 @@ from fraise.training.training import pretrain_transformer
 from fraise.tokenizer.loading import load_tokenizer
 from fraise.data.loading import load_training_data
 entries = importlib.metadata.distribution("fraise").entry_points
-assert {entry.name for entry in entries} == {"train", "create-tokenizer", "visualize-training-data", "params", "checkpoint-to-model", "migrate-run"}
+assert {entry.name for entry in entries} == {"train", "create-tokenizer", "visualize-training-data", "params", "checkpoint-to-model", "migrate-run", "fraise-web"}
+assert (pathlib.Path(fraise.__file__).parent / "web" / "static" / "index.html").is_file()
 for entry in entries:
     sys.argv = [entry.name, "--help"]
     with contextlib.redirect_stdout(io.StringIO()):

@@ -92,7 +92,7 @@ def load_checkpoint_file(path: str | Path, *, mmap: bool = False) -> dict:
     return _validate_checkpoint(_safe_load(path, mmap=mmap), path)
 
 
-def load_model_weights(path: str | Path) -> dict:
+def load_model_weights(path: str | Path, *, migrate_legacy: bool = True) -> dict:
     weights = _safe_load(path)
     if isinstance(weights, dict) and "schema_version" in weights:
         return _validate_checkpoint(weights, path)["model_state_dict"]
@@ -102,7 +102,7 @@ def load_model_weights(path: str | Path) -> dict:
         or any(not isinstance(value, torch.Tensor) for value in weights.values())
     ):
         raise ValueError(f"expected model weights: {path}")
-    return migrate_v2_weights(weights)
+    return migrate_v2_weights(weights) if migrate_legacy else weights
 
 
 class CheckpointStore:

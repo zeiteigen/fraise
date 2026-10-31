@@ -7,8 +7,8 @@ from time import monotonic
 import torch
 from datasets import Dataset
 
+from fraise.architectures import ModelProtocol, get_architecture
 from fraise.config.training import TrainingSettings
-from fraise.model.model import FraiseModel
 
 from ..run.checkpoints import load_checkpoint_file
 from .evaluate import evaluate
@@ -17,7 +17,7 @@ from .worker_lifetime import exit_with_parent
 
 @dataclass
 class CheckpointValidator:
-    model: FraiseModel
+    model: ModelProtocol
     split: Dataset
     settings: TrainingSettings
     pad_token_id: int
@@ -44,13 +44,17 @@ _worker: CheckpointValidator | None = None
 _events = None
 
 
-def init_validation_worker(config, split, settings, pad_token_id, parent_pid, events):
+def init_validation_worker(
+    config, split, settings, pad_token_id, parent_pid, events, architecture=None
+):
     global _worker, _events
     exit_with_parent(parent_pid)
     _events = events
     torch.set_num_threads(settings.validation_cpu_threads)
+    # Spawn starts a fresh registry; carry the resolved parent hooks explicitly.
+    architecture = architecture or get_architecture(config.architecture)
     _worker = CheckpointValidator(
-        FraiseModel(config).to("cpu").eval(),
+        architecture.build(config).to("cpu").eval(),
         split,
         replace(settings, use_bf16=False),
         pad_token_id,
