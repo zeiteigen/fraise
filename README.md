@@ -9,6 +9,8 @@ base output vocabulary, as described in [PoC.md](PoC.md). Implemented stages:
 4. Compositional macro embeddings (`macro_embedding`, ablatable to `independent`).
 5. Learned 32-dimensional macro residuals (`macro_residual_dim`; 0 disables them).
 6. Trie-based autoregressive bridging between the global and local decoders.
+7. Multi-level hierarchical input embeddings with per-token residual widths
+   ([Hierarchical embeddings](#hierarchical-embeddings-8k--16k--64k--)).
 
 Multi-token prediction, dynamic decomposition, and variable-resolution KV caches
 remain experiment stages. See [Asymmetric Fraise](#asymmetric-fraise-macro-in-base-out).
@@ -20,7 +22,7 @@ uv sync --extra web
 uv run --extra web fraise-web
 ```
 
-Open **http://127.0.0.1:8000**. The workspace has three views:
+Open **http://127.0.0.1:8000**. The workspace has four views:
 
 - **Autocomplete:** edit a document and generate from the text before the cursor.
   Review the streamed continuation, then accept it at the saved cursor position
@@ -34,6 +36,8 @@ Open **http://127.0.0.1:8000**. The workspace has three views:
   checkpoints. Outputs include generation speed, loading time, saved settings,
   tokenizer identity, and available validation results. Validation loss depends
   on tokenization and is not a direct comparison across different tokenizers.
+- **Tokenization:** inspect how text is segmented and how each input token is
+  composed through an embedding hierarchy; compare several configurations.
 - **Train:** select an existing tokenizer, edit forms or complete JSON settings,
   launch a new run, or resume a checkpoint. Progress, loss, and logs update live.
   Stop saves a resumable checkpoint after the current optimizer step; preparation
@@ -524,6 +528,106 @@ a run starts, so checkpoints and final weights are self-contained. The variable
 number of local slots is kept out of the fixed-shape compiled graph; the rest of
 the forward pass compiles normally. NPU validation is not supported for
 hierarchical models; use `validation_device: "cpu"`.
+
+## Hierarchical embeddings (8k → 16k → 64k → …)
+
+`"macro_embedding": "hierarchical"` generalizes the compositional 8k → 64k input
+embedding to any number of levels, such as 8k → 16k → 64k or 8k → 32k → 128k → 1M.
+Only the final input tokenizer segments text and creates transformer positions;
+intermediate levels are representation layers that build each input token's
+embedding. The base output vocabulary, local decoder, trie, and generation are
+unchanged, and existing configurations keep the two-level `MacroEmbedding`.
+
+**Model.** Vocabularies are nested: level `l` contains nodes `0 .. vocab_size_l - 1`,
+level 0 is the atom (base-token) table, and the top level contains every input
+token. At each level `l >= 1`, every node in the level's vocabulary is
+
+    x_l(n) = sum_i g_i * x_{l-1}(c_i) / sqrt(k) + length_l(k)  [+ P_l r(n)]
+
+where `c_1 .. c_k` are its ordered children (a node carried over from level `l-1`
+is composed from itself). Each node owns **one** residual `r(n)`, added at the
+level that introduces it (atoms at level 1), so a token present at several levels
+never gets duplicate residual parameters. Residual widths are per token and may
+be 0; values are packed per level and a width-`w` residual uses the first `w` rows
+of the level's zero-initialized projection. `composition` is `"per_level"` (gates,
+length embeddings, and projection per level) or `"shared"`. With two levels this
+reproduces the original compositional formula exactly. Forward passes compose each
+distinct node of a batch once per level and gather the results back to positions;
+this step runs eagerly (its sizes depend on the batch), while the transformer
+still compiles.
+
+**Configuration.** Level shapes live in the model configuration, so `params`
+counts parameters exactly and reports residual memory per level:
+
+```json
+"macro_embedding": "hierarchical",
+"macro_residual_dim": 0,
+"embedding_hierarchy": {
+  "levels": [
+    {"vocab_size": 8192},
+    {"vocab_size": 16384, "max_composition_length": 8, "residual_dim": 16},
+    {"vocab_size": 65536, "max_composition_length": 8, "residual_dim": 32}
+  ],
+  "composition": "per_level",
+  "source": "tokenizer_merges"
+}
+```
+
+`"source": "tokenizer_merges"` derives the structure from the macro tokenizer:
+intermediate levels are merge-order prefixes, and a macro's children are found by
+expanding its merge tree down to the level below. It is a simple valid hierarchy
+for experiments, not a vocabulary-selection algorithm. Residual widths are uniform
+per level (level 1's width also applies to atoms). Changing `levels` is all it
+takes to train a different hierarchy over the same tokenizer and data caches.
+
+For an externally generated hierarchy use `"source": "file"` with `"path"` and the
+file's `"sha256"`. Non-uniform levels also state `"residual_parameters"` (the sum
+of their owned widths), so parameter shapes are known before the file is read:
+
+```sh
+uv run fraise-hierarchy build --tokenizer-file data/tokenizers/fraise-macro-65536-....json \
+  --level-sizes "8192 16384 65536" --residual-dims "16 32" \
+  --output data/hierarchies/merges-8k-16k-64k.npz   # prints the config block
+uv run fraise-hierarchy inspect data/hierarchies/merges-8k-16k-64k.npz \
+  --tokenizer-file data/tokenizers/fraise-macro-65536-....json
+uv run fraise-hierarchy show "The strawberry field" \
+  --tokenizer-file data/tokenizers/fraise-macro-65536-....json \
+  --hierarchy data/hierarchies/merges-8k-16k-64k.npz
+```
+
+At run start (fresh or resumed) the definition is checked against the
+configuration (level sizes, composition lengths, residual widths and totals) and
+against the tokenizer: every input token must expand to exactly its tokenizer
+decomposition. It is then copied into persistent buffers, so checkpoints and final
+weights are self-contained: inference, export, and the visualizer read the
+structure from the weights. Resuming re-reads the file, so keep it at its
+configured path (relative paths resolve from the working directory). The packed
+residuals use AdamW with weight decay like the two-level residual table.
+
+**Hierarchy file format** (`fraise.hierarchy.EmbeddingHierarchy`, `.npz` or `.json`):
+
+| Field | Shape | Meaning |
+|---|---|---|
+| `level_sizes` | `[L]` | Cumulative nested node counts; `level_sizes[0]` is the base vocabulary. |
+| `compositions_l` (npz) / `compositions[l-1]` (json) | `[new_l, K_l]` | Ordered children (nodes `< level_sizes[l-1]`) of each new node `level_sizes[l-1] + i`; `-1` pads rows (json: ragged lists). |
+| `residual_widths` | `[level_sizes[-1]]` | One width per node, `>= 0`; owned by the introducing level (atoms by level 1). |
+| `input_nodes` | `[input_vocab]`, optional | Node of each input token; omit for the identity. Lets intermediate nodes be tokens the input tokenizer never emits. |
+| `header` (npz) | JSON | `format: "fraise-embedding-hierarchy"`, `format_version: 1`, `level_sizes`, optional `level_names` and `metadata`. |
+
+`EmbeddingHierarchy(level_sizes, compositions, residual_widths, input_nodes).save(path)`
+validates and writes either format and returns the sha256; `config_levels()`
+returns the matching `levels` list.
+
+**Visualizer.** `uv run --extra web fraise-web`, then open **Tokenization**
+(`http://127.0.0.1:8000/#tokens`). Enter any text and add up to six
+configurations to compare: a macro tokenizer's default two-level hierarchy,
+merge-prefix levels typed as sizes, a file in `DATA_DIR/hierarchies/`, or the
+hierarchy stored in a saved run's checkpoint. Each result separates **text
+segmentation** (input tokens = transformer positions, and base output tokens) from
+**representation composition**: a level-by-level icicle in which each cell spans
+the base tokens it covers (dashed cells recompose carried nodes from themselves), a level table
+with residual ownership and parameters, expandable composition trees, and a node
+inspector with IDs, text, levels, residual width, and children.
 
 ## Existing artifacts
 

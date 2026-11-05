@@ -79,6 +79,8 @@ remaining matrices use AdamW, while biases and other vectors use AdamW without
 decay. Use an empty Muon set when appropriate. Shared parameters are deduplicated.
 For fused matrices, `row_blocks` maps a Muon parameter to row counts that partition
 it into independent updates, as the Transformer adapter does for Q/K/V.
+`decayed_vectors` names 1-D parameters that keep AdamW weight decay because they
+pack lexical rows (the hierarchical embedding's variable-width residuals).
 
 Import and register the spec at module scope in `fraise.architectures.__init__`,
 after the registry exports:

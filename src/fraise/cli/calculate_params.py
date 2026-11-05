@@ -24,6 +24,25 @@ def main(argv: list[str] | None = None) -> None:
     if breakdown is not None:
         for name, count in breakdown(config).items():
             print(f"  {name}: {count:,}")
+    if getattr(config, "embedding_hierarchy", None) is not None:
+        from fraise.architectures.hierarchical import hierarchy_report
+
+        print("Embedding hierarchy (residual memory: fp32 weights / training state):")
+        for record in hierarchy_report(config):
+            print(
+                f"  L{record['level']} vocab {record['vocab_size']:,}: "
+                f"{record['new_nodes']:,} new nodes, "
+                f"{record['owned_residual_nodes']:,} owned residuals "
+                f"(max width {record['residual_dim']}), "
+                f"{record['residual_parameters']:,} residual parameters, "
+                f"{_megabytes(record['residual_bytes'])} / "
+                f"{_megabytes(record['residual_training_bytes'])}, "
+                f"structure buffers {_megabytes(record['structure_bytes'])}"
+            )
+
+
+def _megabytes(count: int) -> str:
+    return f"{count / 2**20:.2f} MiB"
 
 
 if __name__ == "__main__":

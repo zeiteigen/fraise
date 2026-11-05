@@ -54,6 +54,11 @@ class Catalog:
             self._tokenizer_cache[key] = {
                 "vocab_size": tokenizer.get_vocab_size(),
                 "fingerprint": tokenizer_fingerprint(tokenizer),
+                # Macro tokenizers compose over a smaller base (output) vocabulary.
+                "macro": hasattr(tokenizer, "base_vocab_size"),
+                "base_vocab_size": getattr(
+                    tokenizer, "base_vocab_size", tokenizer.get_vocab_size()
+                ),
             }
         return {"id": identifier, "label": label, **self._tokenizer_cache[key]}
 

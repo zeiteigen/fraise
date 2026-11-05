@@ -1,6 +1,6 @@
 """Request contracts for the local playground API."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
@@ -31,3 +31,25 @@ class TrainingRequest(Request):
     tokenizer_id: str
     run_name: str
     resume: ModelReference | None = None
+
+
+class HierarchySpec(Request):
+    """``auto`` shows a macro tokenizer's two-level hierarchy (8k -> 64k)."""
+
+    kind: Literal["auto", "none", "merges", "file", "run"] = "auto"
+    level_sizes: list[StrictInt] | None = Field(default=None, max_length=16)
+    residual_dims: list[StrictInt] | None = Field(default=None, max_length=16)
+    file_id: str | None = None
+    run: ModelReference | None = None
+
+
+class TokenizeConfiguration(Request):
+    label: str | None = Field(default=None, max_length=200)
+    tokenizer_id: str | None = None
+    hierarchy: HierarchySpec = Field(default_factory=HierarchySpec)
+
+
+class TokenizeRequest(Request):
+    text: str = Field(min_length=1, max_length=20000)
+    add_special_tokens: bool = False
+    configurations: list[TokenizeConfiguration] = Field(min_length=1, max_length=6)

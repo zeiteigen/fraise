@@ -267,3 +267,47 @@ summary::marker { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Tokenization and hierarchy visualizer */
+.tok-config-heading { margin-top: 14px; }
+.tok-configs { display: grid; gap: 8px; }
+.tok-config { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 4px; background: #f8fafb; }
+.tok-config label { min-width: 150px; }
+.tok-config select { max-width: 320px; }
+.tok-results { display: grid; gap: 14px; }
+.tok-card .metrics { margin-bottom: 10px; }
+.tok-section { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.tok-section > h3, .tok-section > summary { margin-bottom: 4px; }
+.tok-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin-top: 8px; }
+.tok-strip-label { width: 96px; flex-shrink: 0; color: var(--muted); font-size: 11px; }
+.tok-chip { padding: 2px 5px; border-radius: 3px; font: 12px/1.5 var(--mono); white-space: pre; }
+.tok-chip.segment { border: 1px solid rgba(0,0,0,.28); font-weight: 600; }
+.tok-chip.base { border: 1px solid rgba(0,0,0,.08); opacity: .85; }
+.tok-chip.selected, .tok-cell.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+.color-0 { background: #fde9b8; } .color-1 { background: #cfe2f7; } .color-2 { background: #d3efd9; }
+.color-3 { background: #f8d6d3; } .color-4 { background: #e2dcf6; } .color-5 { background: #fbdcc0; }
+.tok-icicle-scroll { overflow-x: auto; padding: 4px 2px 8px; }
+.tok-icicle { display: grid; gap: 3px; width: max-content; }
+.tok-level-label { grid-column: 1; align-self: center; padding-right: 8px; color: var(--muted); font: 11px/1.4 var(--mono); white-space: nowrap; }
+.tok-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 26px; padding: 2px 4px; border: 1px solid rgba(0,0,0,.3); border-radius: 3px; font: 12px/1.35 var(--mono); }
+.tok-cell small { color: #5c6770; font-size: 9px; }
+.tok-cell-text { white-space: pre; }
+.tok-cell.carried { border-style: dashed; opacity: .55; background-image: repeating-linear-gradient(135deg, transparent 0 5px, rgba(255,255,255,.55) 5px 8px); }
+.tok-cell.focused { box-shadow: 0 0 0 2px var(--ink); opacity: 1; }
+.tok-table { width: 100%; margin-top: 8px; border-collapse: collapse; font: 11px/1.5 var(--mono); }
+.tok-table th, .tok-table td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.tok-table th { color: var(--muted); font-weight: 500; }
+.tok-trees { display: grid; gap: 6px; margin-top: 8px; }
+.tok-tree-root { display: grid; gap: 3px; justify-items: start; }
+.tok-tree-root.selected { padding-left: 6px; border-left: 3px solid var(--accent); }
+.tok-tree { margin-left: 18px; font: 12px/1.6 var(--mono); }
+.tok-tree > summary { white-space: pre; }
+.tok-tree > .tok-tree, .tok-tree > .tok-tree-leaf { margin-left: 18px; }
+.tok-tree-root > .tok-tree { margin-left: 0; }
+.tok-tree-leaf { display: block; padding: 0 0 0 14px; text-align: left; font: 12px/1.6 var(--mono); white-space: pre; color: #3e4a54; }
+.tok-tree-leaf:hover, .tok-tree > summary:hover { color: var(--accent); }
+.tok-detail { margin-top: 14px; padding: 12px; border: 1px solid #cbd8e1; border-radius: 4px; background: #f4f8fb; }
+.tok-detail h3 { margin-bottom: 8px; font-family: var(--mono); }
+.tok-detail-grid { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 10px; }
+.tok-detail-grid dt { color: var(--muted); font-size: 11px; }
+.tok-detail-grid dd { margin: 0; font: 12px/1.5 var(--mono); overflow-wrap: anywhere; white-space: pre-wrap; }

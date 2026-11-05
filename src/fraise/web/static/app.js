@@ -3,6 +3,7 @@ import { $, $$, element } from '/static/ui.js';
 import { Autocomplete } from '/static/autocomplete.js';
 import { Compare } from '/static/compare.js';
 import { Train } from '/static/train.js';
+import { Tokens } from '/static/tokens.js';
 
 class Workspace {
   constructor() {
@@ -16,6 +17,7 @@ class Workspace {
     this.views.autocomplete = new Autocomplete($('#autocomplete-view'), this);
     this.views.compare = new Compare($('#compare-view'), this);
     this.views.train = new Train($('#train-view'), this);
+    this.views.tokens = new Tokens($('#tokens-view'), this);
     $$('[data-view]').forEach(button => button.addEventListener('click', () => this.navigate(button.dataset.view)));
     $('#new-input').addEventListener('click', () => { this.views.autocomplete.newInput(); this.navigate('autocomplete'); });
     $('#menu-toggle').addEventListener('click', () => this.toggleSidebar());
@@ -37,8 +39,8 @@ class Workspace {
       button.classList.toggle('active', active);
       if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
     });
-    $('#view-label').textContent = { autocomplete: 'Autocomplete', compare: 'Compare', train: 'Train' }[view];
-    $('#view-subtitle').textContent = { autocomplete: 'Base language model evaluation', compare: 'Shared input and sampling settings', train: 'Configuration, progress, and checkpoints' }[view];
+    $('#view-label').textContent = { autocomplete: 'Autocomplete', compare: 'Compare', train: 'Train', tokens: 'Tokenization' }[view];
+    $('#view-subtitle').textContent = { autocomplete: 'Base language model evaluation', compare: 'Shared input and sampling settings', train: 'Configuration, progress, and checkpoints', tokens: 'Segmentation and hierarchical composition' }[view];
     if (updateHash) history.replaceState(null, '', `#${view}`);
     this.toggleSidebar(false);
   }

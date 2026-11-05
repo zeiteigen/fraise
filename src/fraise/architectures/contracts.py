@@ -52,12 +52,17 @@ class ModelProtocol(Protocol):
 
 @dataclass(frozen=True)
 class OptimizerLayout:
-    """Matrices assigned to Muon, including independent fused row blocks."""
+    """Matrices assigned to Muon, including independent fused row blocks.
+
+    ``decayed_vectors`` lists 1-D parameters that are really packed lexical
+    rows (such as variable-width residuals) and keep AdamW weight decay.
+    """
 
     muon_parameters: frozenset[torch.nn.Parameter]
     row_blocks: Mapping[torch.nn.Parameter, tuple[int, ...]] = field(
         default_factory=dict
     )
+    decayed_vectors: frozenset[torch.nn.Parameter] = frozenset()
 
 
 @dataclass(frozen=True)

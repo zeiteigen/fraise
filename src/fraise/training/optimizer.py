@@ -131,6 +131,8 @@ class MuonWithAdamW(torch.optim.Optimizer):
         parameters = set(model.parameters())
         if hidden_matrices - parameters:
             raise ValueError("Muon layout contains parameters outside the model")
+        if layout.decayed_vectors & hidden_matrices:
+            raise ValueError("decayed vectors cannot also use Muon")
         if layout.row_blocks.keys() - hidden_matrices:
             raise ValueError("row blocks require a Muon parameter")
         muon_params, decay_params, no_decay_params = [], [], []
@@ -140,7 +142,7 @@ class MuonWithAdamW(torch.optim.Optimizer):
                 continue
             if parameter in hidden_matrices:
                 muon_params.append(parameter)
-            elif parameter.ndim >= 2:
+            elif parameter.ndim >= 2 or parameter in layout.decayed_vectors:
                 decay_params.append(parameter)
             else:
                 # Biases and LayerNorm gains/offsets are not decayed toward zero.

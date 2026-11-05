@@ -53,6 +53,9 @@ def describe_architectures():
                 kind = "object"
             elif isinstance(value, (list, tuple)):
                 kind = "array"
+            elif value is None and field.default is None:
+                # Optional nested settings (such as embedding_hierarchy) are JSON-only.
+                kind = "object"
             else:
                 kind = "string"
             descriptions.append({"name": field.name, "type": kind, "default": value})

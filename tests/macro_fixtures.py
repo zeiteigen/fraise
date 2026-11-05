@@ -62,3 +62,26 @@ def tiny_fraise_config(tokenizer, **changes):
             | changes
         )
     )
+
+
+def tiny_hierarchy_config(tokenizer, level_sizes, residual_dims, **changes):
+    """A hierarchical Fraise config whose levels are merge-order prefixes."""
+    lengths = changes.pop("max_composition_length", tokenizer.max_macro_length)
+    levels = [{"vocab_size": level_sizes[0]}] + [
+        {
+            "vocab_size": size,
+            "max_composition_length": lengths,
+            "residual_dim": width,
+        }
+        for size, width in zip(level_sizes[1:], residual_dims)
+    ]
+    hierarchy = {"levels": levels} | changes.pop("hierarchy", {})
+    return tiny_fraise_config(
+        tokenizer,
+        **{
+            "macro_embedding": "hierarchical",
+            "macro_residual_dim": 0,
+            "embedding_hierarchy": hierarchy,
+        }
+        | changes,
+    )

@@ -18,6 +18,7 @@ from torch import nn
 from fraise.config.hierarchical import FraiseConfig
 
 from .cache import KVCache
+from .hierarchy_embedding import HierarchicalEmbedding
 from .swiglu import SwiGLU
 from .transformer import Transformer
 
@@ -136,7 +137,11 @@ class FraiseHierarchicalModel(nn.Module):
         lengths[: config.base_vocab_size] = 1
         self.register_buffer("decompositions", decompositions)
         self.register_buffer("macro_lengths", lengths)
-        self.embedding = MacroEmbedding(config)
+        self.embedding = (
+            HierarchicalEmbedding(config)
+            if config.macro_embedding == "hierarchical"
+            else MacroEmbedding(config)
+        )
         self.transformer = Transformer(
             config.residual_stream_dim,
             config.head_dim,
@@ -185,9 +190,15 @@ class FraiseHierarchicalModel(nn.Module):
         cached = 0 if cache is None else len(cache)
         if cached + input_ids.size(1) > self.max_seq_len:
             raise ValueError(f"sequence length exceeds max_seq_len {self.max_seq_len}")
-        x = self.embedding(input_ids, self.decompositions, self.macro_lengths)
+        x = self.embed(input_ids)
         hidden = self.transformer(x, cache)
         return hidden[:, -1:] if last_only else hidden
+
+    def embed(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Input vectors ``[batch, sequence, model_dim]`` for macro IDs."""
+        if isinstance(self.embedding, HierarchicalEmbedding):
+            return self.embedding(input_ids)
+        return self.embedding(input_ids, self.decompositions, self.macro_lengths)
 
     def local_targets(self, targets):
         """Per-slot base targets (END after the last part) and their counts."""

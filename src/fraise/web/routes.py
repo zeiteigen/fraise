@@ -5,11 +5,13 @@ from fastapi.responses import StreamingResponse
 
 from .configuration import describe_architectures, training_defaults, validate_training
 from .generation import GenerationStream
-from .schemas import GenerationRequest, TrainingRequest
+from .schemas import GenerationRequest, TokenizeRequest, TrainingRequest
+from .tokenization import TokenizationWorkbench
 
 
 def create_routes(catalog, gate, inference, jobs, device_info):
     router = APIRouter(prefix="/api")
+    workbench = TokenizationWorkbench(catalog)
 
     @router.get("/catalog")
     def get_catalog():
@@ -49,6 +51,14 @@ def create_routes(catalog, gate, inference, jobs, device_info):
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @router.get("/hierarchies")
+    def get_hierarchies():
+        return {"hierarchies": workbench.hierarchy_files()}
+
+    @router.post("/tokenize")
+    def tokenize(request: TokenizeRequest):
+        return workbench.analyze(request)
 
     @router.get("/jobs")
     def get_jobs():

@@ -18,6 +18,7 @@
         <button class="nav-item active" data-view="autocomplete">Autocomplete</button>
         <button class="nav-item" data-view="compare">Compare</button>
         <button class="nav-item" data-view="train">Train</button>
+        <button class="nav-item" data-view="tokens">Tokenization</button>
       </nav>
       <div class="history-heading"><span>Saved inputs</span><button id="clear-history" class="icon-button" aria-label="Clear saved inputs" title="Clear saved inputs">Clear</button></div>
       <div class="history-list" id="history-list"><p class="sidebar-empty">No saved inputs.</p></div>
@@ -32,6 +33,7 @@
       <section class="view workspace-view autocomplete-view" id="autocomplete-view" aria-label="Autocomplete"></section>
       <section class="view workspace-view" id="compare-view" aria-label="Compare checkpoints" hidden></section>
       <section class="view workspace-view" id="train-view" aria-label="Train a model" hidden></section>
+      <section class="view workspace-view" id="tokens-view" aria-label="Tokenization and hierarchy" hidden></section>
       <noscript><p class="notice">Fraise needs JavaScript to connect to your local models.</p></noscript>
     </main>
     <div class="toast" id="toast" role="status" hidden></div>
