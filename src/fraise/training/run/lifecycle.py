@@ -43,6 +43,7 @@ class RunLifecycle:
         self.previous_validation_failures = list(
             self.artifacts.metadata.get("validation_failures", [])
         )
+        self.scored_validation_steps = set()
 
     def restore(self, runtime):
         state = self.checkpoints.restore(
@@ -70,6 +71,24 @@ class RunLifecycle:
             validation=validation,
             validation_results=validation_results,
         )
+        # One flat event per completed evaluation, so JSON-lines readers get scalars.
+        for result in validation_results:
+            if (
+                result["status"] == "completed"
+                and result["step"] not in self.scored_validation_steps
+            ):
+                self.scored_validation_steps.add(result["step"])
+                scores = {
+                    key: result[key]
+                    for key in ("loss", "bits_per_byte")
+                    if key in result
+                }
+                emit(
+                    self.on_event,
+                    "validation_score",
+                    global_step=result["step"],
+                    validation=scores,
+                )
 
     def checkpoint(self, runtime, state, validation):
         path = self.checkpoints.save(
