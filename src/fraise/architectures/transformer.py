@@ -20,7 +20,12 @@ def count_parameters(config: ModelConfig) -> int:
     attention = 2 * model_dim * config.num_heads * (config.qk_dim + config.head_dim)
     swiglu = 3 * model_dim * hidden_dim + 2 * hidden_dim + model_dim
     layer_norms = 4 * model_dim
-    return embeddings_and_head + config.num_layers * (attention + swiglu + layer_norms)
+    final_norm = 2 * model_dim if config.final_norm else 0
+    return (
+        embeddings_and_head
+        + final_norm
+        + config.num_layers * (attention + swiglu + layer_norms)
+    )
 
 
 def initialize(model: FraiseModel, config: ModelConfig, settings) -> None:
@@ -28,6 +33,12 @@ def initialize(model: FraiseModel, config: ModelConfig, settings) -> None:
         # Unit-scale embeddings make the residual stream predict its own token.
         torch.nn.init.normal_(
             model.token_embedding.weight, std=settings.tied_weight_init_std
+        )
+    elif settings.embedding_init_std is not None:
+        # Otherwise nn.Embedding keeps PyTorch's N(0, 1), which AdamW steps of
+        # ~1e-3 barely move.
+        torch.nn.init.normal_(
+            model.token_embedding.weight, std=settings.embedding_init_std
         )
 
 

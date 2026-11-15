@@ -24,6 +24,10 @@ class FraiseModel(nn.Module):
             config.swiglu_up_dim,
             config.num_layers,
         )
+        # Absent (not an identity) when disabled, so older state dicts still load.
+        self.final_norm = (
+            nn.LayerNorm(config.residual_stream_dim) if config.final_norm else None
+        )
         self.lm_head = nn.Linear(config.residual_stream_dim, config.vocab_size)
         if config.tie_word_embeddings:
             self.lm_head.weight = self.token_embedding.weight
@@ -48,4 +52,6 @@ class FraiseModel(nn.Module):
         hidden = self.transformer(self.token_embedding(input_ids), cache)
         if last_only:
             hidden = hidden[:, -1:]
+        if self.final_norm is not None:
+            hidden = self.final_norm(hidden)
         return self.lm_head(hidden)

@@ -40,6 +40,8 @@ class TrainingSettings:
     shuffle_data: bool = False
     gradient_clip_norm: float = 1.0
     tied_weight_init_std: float = 0.02
+    # Untied input embeddings: None keeps PyTorch's default N(0, 1).
+    embedding_init_std: float | None = None
 
     def __post_init__(self):
         if self.minibatch_size is None:
@@ -78,6 +80,8 @@ class TrainingSettings:
         number("weight_decay", self.weight_decay, inclusive=True)
         number("gradient_clip_norm", self.gradient_clip_norm)
         number("tied_weight_init_std", self.tied_weight_init_std)
+        if self.embedding_init_std is not None:
+            number("embedding_init_std", self.embedding_init_std)
         number("validation_timeout_seconds", self.validation_timeout_seconds)
         if self.validation_device not in ("cpu", "npu"):
             raise ValueError("validation_device must be 'cpu' or 'npu'")

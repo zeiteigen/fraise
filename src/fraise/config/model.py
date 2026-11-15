@@ -17,14 +17,17 @@ class ModelConfig:
     max_seq_len: int = 2048
     tie_word_embeddings: bool = False
     architecture: str = "transformer"
+    # LayerNorm on the final residual stream before the output projection.
+    final_norm: bool = False
 
     def __post_init__(self):
         for field in fields(self):
-            if field.name not in {"tie_word_embeddings", "architecture"}:
+            if field.name not in {"tie_word_embeddings", "architecture", "final_norm"}:
                 integer(field.name, getattr(self, field.name))
         if self.architecture != "transformer":
             raise ValueError("ModelConfig only supports architecture 'transformer'")
-        if type(self.tie_word_embeddings) is not bool:
-            raise TypeError("tie_word_embeddings must be a bool")
+        for name in ("tie_word_embeddings", "final_norm"):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be a bool")
         if self.qk_dim % 2:
             raise ValueError("qk_dim must be even for RoPE")
