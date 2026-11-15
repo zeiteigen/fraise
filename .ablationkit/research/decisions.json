@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "kind": "decision",
+  "exported_by": "ablationkit",
+  "notice": "Exported by AblationKit from the coordinator's research records. Edits here are not read back: use the UI or `ablationkit research`.",
+  "records": [
+    {
+      "schema_version": 1,
+      "record_id": "dec-20261110-d16d1e",
+      "project_id": "fraise",
+      "kind": "decision",
+      "tags": [
+        "poc",
+        "protocol"
+      ],
+      "links": [
+        {
+          "kind": "study",
+          "id": "poc-pilot-100m"
+        },
+        {
+          "kind": "task",
+          "id": "task-20261110-apoxgb"
+        }
+      ],
+      "status": "accepted",
+      "title": "Pilot macro models use batch 32 (base 8k uses batch 64)",
+      "summary": "In the 100M pilot, the 64k/64k transformer on the macro tokenizer and Fraise trained with batches of 32 sequences of 512 positions (about 27.9k base tokens per step, 17,896 steps), rather than the 64 sequences of the 8k/8k transformer (32,768 base tokens per step, 15,259 steps). The project owner chose it 'to account for a more complex architecture', an untested belief rather than a measured effect or a memory workaround, and it gives the macro models about 17% more optimizer steps. It leaves a step-count confound in the pilot; at 38M parameters the later gap audit found that halving the 64k/64k model's batch made no difference (1.4996 against 1.4990 bits per byte).",
+      "body": "## Context\nBudgets count base tokens of text, and every model reads windows of 512 positions. A macro covers 1.705 base tokens on held-out text, so at the same batch in positions the macro models would see 1.7 times as much text per step and take far fewer steps than the 8k/8k transformer.\n\nSource: `docs/reports/2026-10-31-fraise-pilot-report.md` §4 (\"Why batch 32\"), and the imported runs' `training_hyperparameters.json` (`pilot-macro.json` vs `pilot-base.json`). Status `accepted` is confirmed by the researcher (2026-11-10).\n\n## Options\n| Batch for the macro models | Base tokens per step | Effect |\n| --- | --- | --- |\n| 64 × 512 (as the 8k/8k) | ≈ 55.9k | Same positions per step; far fewer steps |\n| ≈ 38 × 512 (64 / 1.705 ≈ 37.5) | ≈ 32.8k | About the same text per step as the 8k/8k |\n| **32 × 512 (chosen)** | ≈ 27.9k | About 17% more optimizer steps than the 8k/8k |\n\n## Decision and rationale\nBatch 32. The project owner chose it deliberately \"to account for a more complex architecture\". The report notes this is an untested belief, not a measured effect, and that it was not a memory workaround (accumulation would have allowed batch 64).\n\n## Consequences\n- When reading the PoC pilot at 100M, the macro models differ from the 8k/8k transformer in step count (17,896 against 15,259), not only in architecture.\n- The AdamW learning rate (3e-3) was not re-tuned for batch 32.\n- Later evidence: in the gap audit at 38M, with both training fixes on, the 64k/64k transformer on the macro tokenizer scored 1.4996 bits per byte at batch 32 (1,782 steps) against 1.4990 at batch 64 (891 steps). At that scale the step count did not matter; the pilot itself has not been re-run.",
+      "created_at": "2026-11-10T20:51:52.626Z",
+      "updated_at": "2026-11-11T07:37:07.495Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "6830bb2a421e119b"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "02267bbc14d24f59"
+      },
+      "revision": 2
+    }
+  ]
+}

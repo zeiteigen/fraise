@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "kind": "approach",
+  "exported_by": "ablationkit",
+  "notice": "Exported by AblationKit from the coordinator's research records. Edits here are not read back: use the UI or `ablationkit research`.",
+  "records": [
+    {
+      "schema_version": 1,
+      "record_id": "apr-20261110-92615e",
+      "project_id": "fraise",
+      "kind": "approach",
+      "tags": [
+        "poc",
+        "tokenizer"
+      ],
+      "links": [
+        {
+          "kind": "study",
+          "id": "poc-pilot-100m"
+        },
+        {
+          "kind": "study",
+          "id": "lr-sweep-38m"
+        },
+        {
+          "kind": "task",
+          "id": "task-20261110-apoxgb"
+        }
+      ],
+      "status": "active",
+      "title": "Macro tokenizer: BPE merges over base-token IDs",
+      "summary": "A second byte-pair-encoding (BPE) tokenizer learned over sequences of 8k base-token IDs rather than over text, giving a 64k macro vocabulary in which every macro is a fixed sequence of 1 to 8 base tokens, so expanding a macro encoding always reproduces the base encoding exactly. It gives Fraise and the 64k/64k baseline about 41% fewer positions than the 8k tokenizer (1.705 base tokens per macro on held-out text). It is in use for both, but the gap audit found at 38M parameters that its merges, which cross word boundaries, cost the 64k/64k transformer about 0.09 bits per byte against a standard word-pretokenized 64k BPE.",
+      "body": "## How it works\nText is represented at three nested levels, each a deterministic grouping of the one below (pilot report §3.2):\n\n```text\nlevel 2  macro tokens  (65,536)   [' strawberry']                  <- global transformer input\nlevel 1  base tokens   (8,192)    [' str'] ['aw'] ['ber'] ['ry']   <- model output / local decoder\nlevel 0  bytes         (256)      ' ' 's' 't' 'r' 'a' 'w' 'b' 'e' 'r' 'r' 'y'\n```\n\nText is first encoded by the 8k byte-level BPE. Each base ID becomes one private-use character, and the Rust BPE trainer merges adjacent IDs. Macro IDs below 8,192 are the base tokens themselves; merge $k$ creates macro $8192 + k$. Special tokens never merge, a base token containing a line break ends a macro, and no macro exceeds 8 base tokens. Because the second level only ever groups whole base tokens, it never re-segments text:\n\n$$\n\\operatorname{expand}(\\operatorname{macro\\_encode}(s)) = \\operatorname{base\\_encode}(s)\n$$\n\nwhere `expand` concatenates each macro's decomposition. This invariant is unit-tested, and it is what lets budgets and bits per byte be counted in base tokens and bytes for every model.\n\n## The tokenizer in use\n`fraise-macro-65536-b501b7e0c0e323b6.json` (sha256 713945ab…), trained on ~300 MB of FineWeb-Edu, so in-domain:\n\n| Property | Value |\n| --- | --- |\n| Base tokens per macro, held-out FineWeb-Edu | 1.705 (41% fewer global positions) |\n| Positions that are multi-token macros | 53% |\n| Macro lengths in the vocabulary (1 / 2 / 3 / 4 / 5 / 6 / 7 / 8) | 8,192 / 34,305 / 17,240 / 4,431 / 1,012 / 248 / 74 / 34 |\n| Decomposition trie | 74,318 non-root nodes: 65,536 macros plus 8,782 internal prefixes |\n\n## Alternatives considered\n- **A standard word-pretokenized 64k BPE** (the gap audit's control), trained by the same trainer as the 8k tokenizer on the same FineWeb-Edu slice. It compresses less (0.777 tokens per 8k token, against 0.59 macros). With both training fixes at 38M parameters, a 64k/64k transformer on it scored 1.4045 bits per byte against 1.4990 on the macro tokenizer.\n- **A macro tokenizer trained on BabyLM** (dialogue-heavy) gave only 1.31× compression on FineWeb, against 1.705× in-domain; BabyLM has since been removed as a source.\n\n## Trade-offs and limitations\n- Merges cross words: only line breaks bound a macro. On 27,974 validation macros, 8.7% of macro boundaries are decided only by base tokens two or more positions ahead, and a model scored on the canonical segmentation is charged for probability placed on other segmentations of the same text.\n- Neither the vocabulary size nor `max_macro_length` has been swept.\n\n## Where it is used\nCode: `src/fraise/tokenizer/macro.py`, `macro_training.py`, `cli/create_tokenizer.py`; described in the README (\"Create a macro tokenizer\") and pilot report §3.2. Used by the 64k/64k and Fraise variants of the PoC pilot at 100M and the LR sweep at 38M, and by the 64k/64k runs of the gap audit at 38M.",
+      "created_at": "2026-11-10T20:51:56.971Z",
+      "updated_at": "2026-11-11T07:37:07.481Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "6830bb2a421e119b"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "02267bbc14d24f59"
+      },
+      "revision": 2
+    },
+    {
+      "schema_version": 1,
+      "record_id": "apr-20261110-1d5459",
+      "project_id": "fraise",
+      "kind": "approach",
+      "tags": [
+        "poc",
+        "architecture"
+      ],
+      "links": [
+        {
+          "kind": "study",
+          "id": "poc-pilot-100m"
+        },
+        {
+          "kind": "study",
+          "id": "lr-sweep-38m"
+        },
+        {
+          "kind": "hypothesis",
+          "id": "hyp-20261110-76aef8"
+        },
+        {
+          "kind": "hypothesis",
+          "id": "hyp-20261110-fd912f"
+        },
+        {
+          "kind": "task",
+          "id": "task-20261110-apoxgb"
+        }
+      ],
+      "status": "active",
+      "title": "Asymmetric Fraise architecture: compositional macro input, trie-based local decoder",
+      "summary": "Fraise (64k in, 8k out) runs a standard transformer over macro positions, builds each macro's input from its base-token embeddings plus a 32-dimensional learned residual, and predicts the next macro one base token at a time, then END, with a small local decoder that walks a trie of valid macro decompositions at generation time. It is meant to cut global transformer steps and KV-cache entries by about 41% while keeping the text inside macros accessible. Active: it trails the 64k/64k transformer on the macro tokenizer by 0.039 bits per byte in the 100M pilot (1.233 against 1.194), and multi-token prediction, dynamic decomposition and variable-resolution KV caches are not yet built.",
+      "body": "## How it works\n**Input.** For a macro $m$ with base-token parts $b_1, \\dots, b_k$ ($k \\le 8$):\n\n$$\nx(m) = \\sum_{i=1}^{k} g_i \\odot \\frac{E[b_i]}{\\sqrt{k}} + \\lambda(k) + P\\,r(m)\n$$\n\n$E$ is the 8,192-row base embedding table, $g_i$ are per-position gates (initialised to 1) that make the composition order-aware, $\\lambda(k)$ is a length embedding, $r(m) \\in \\mathbb{R}^{32}$ is a per-macro residual, and $P$ projects it to the model width. $P$ starts at zero, so every macro begins as its constituents.\n\n**Global transformer.** The same transformer as the baselines, run over macro positions. It outputs a hidden state $h_t$ per macro, and the KV cache holds one entry per macro.\n\n**Local decoder.** For the macro after position $t$, $m_{t+1} = (b_1, \\dots, b_k)$, it predicts slots $j = 0, \\dots, k$:\n\n$$\nz_j = W_c\\,\\mathrm{LN}(h_t) + \\sum_{i<j} g'_i \\odot E'[b_i] + s_j\n$$\n\nfollowed by a few SwiGLU blocks and a head over 8,192 + 1 outputs; the target of slot $j < k$ is $b_{j+1}$, and of slot $k$ is END. A macro's loss is the summed cross-entropy of its base tokens and END, a negative log-likelihood per macro directly comparable to the 64k/64k model's. Every slot depends only on its own context and prefix, so training evaluates all slots in one batch.\n\n**Generation.** Each base token is sampled from the children of the current node of a trie of macro decompositions, plus END where the path already spells a complete macro; a leaf ends the macro without asking the decoder. Only complete macros reach the global transformer. The last prompt macro is re-decided, so a prompt ending in \"straw\" can continue into \"strawberry\".\n\n## Alternatives considered\n- **The 64k/64k transformer on the macro tokenizer**: same input side and tokenizer, but a 64k-row output head scoring whole macros. It is the pilot's large-vocabulary baseline.\n- **Independent macro embeddings** (`macro_embedding: independent`, with `macro_residual_dim: 0`): one full row per macro instead of a composition; an ablation switch, not yet run.\n- **No residuals** (`macro_residual_dim: 0`).\n- **Multi-level hierarchical input embeddings**, a proposed generalisation of the composition to more than two vocabulary levels.\n\n## Trade-offs and limitations\n- In the 100M pilot the local decoder adds 10.1M dense parameters plus a 6.3M output head, about 258 MFLOP per position in training, roughly 41% of the transformer's own per-position FLOPs; peak memory was 16.2 GB against 13.4 GB for the 64k/64k model (pilot report §0, §5.3).\n- Fraise led the 64k/64k model early in the pilot (1.535 against 1.674 BPB at ~56M tokens) but finished 0.039 behind; almost all of that deficit is in predicting the first base token of each next macro.\n- Unmeasured failure mode: residuals of rarely seen macros start at N(0,1) and barely move; once $P$ is learned they may add input noise.\n- Not yet built: multi-token prediction, dynamic decomposition, variable-resolution KV caches (PoC stages 7–9).\n\n## Where it is used\nCode: `src/fraise/config/hierarchical.py`, `model/hierarchical.py`, `architectures/hierarchical.py`, `inference/hierarchical.py`. PoC stages 3–6 (README; pilot report §3.4). The `fraise` variants of the PoC pilot at 100M and the LR sweep at 38M use it.",
+      "created_at": "2026-11-10T20:52:01.573Z",
+      "updated_at": "2026-11-11T07:37:07.486Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "6830bb2a421e119b"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "02267bbc14d24f59"
+      },
+      "revision": 2
+    },
+    {
+      "schema_version": 1,
+      "record_id": "apr-20261110-bd6f12",
+      "project_id": "fraise",
+      "kind": "approach",
+      "tags": [
+        "architecture",
+        "embeddings"
+      ],
+      "links": [
+        {
+          "kind": "hypothesis",
+          "id": "hyp-20261110-fd912f"
+        },
+        {
+          "kind": "task",
+          "id": "task-20261110-apoxgb"
+        }
+      ],
+      "status": "proposed",
+      "title": "Multi-level hierarchical input embeddings (8k → 16k → 64k → …)",
+      "summary": "Generalises Fraise's two-level compositional input embedding to any number of nested vocabulary levels, for example 8k, 16k, then 64k: each token's embedding is composed from its children at the level below, and each token owns one learned residual, added at the level that introduces it. Only the top-level tokenizer segments text, so the intermediate levels change how input embeddings are built without changing transformer positions, the output vocabulary or the decoder. Proposed: it is implemented and can be inspected in the tokenization workbench, but no training run of it exists yet.",
+      "body": "## How it works\nVocabularies are nested: level 0 is the base-token table, and the top level contains every input token. At each level $l \\ge 1$, a node $n$ with ordered children $c_1, \\dots, c_k$ at the level below is\n\n$$\nx_l(n) = \\sum_{i=1}^{k} g_i \\odot \\frac{x_{l-1}(c_i)}{\\sqrt{k}} + \\lambda_l(k) + P_l\\, r(n)\n$$\n\nA node carried over from level $l-1$ is composed from itself. Each node owns one residual $r(n)$, added at the level that introduces it (base tokens at level 1), so a token present at several levels never gets duplicate residual parameters. Residual widths are per token and may be 0; a width-$w$ residual uses the first $w$ rows of the level's zero-initialised projection $P_l$. Gates, length embeddings and projections are either per level (`composition: \"per_level\"`) or shared. With two levels this reproduces the original compositional formula exactly.\n\nThe structure comes either from the macro tokenizer's merges (`source: \"tokenizer_merges\"`: intermediate levels are merge-order prefixes, and a macro's children are found by expanding its merge tree down to the level below) or from a hierarchy file (`source: \"file\"`, with its sha256). It is configured with `macro_embedding: \"hierarchical\"` and `embedding_hierarchy` in the model configuration, so parameter counts are exact before training.\n\n## Alternatives considered\n- The two-level compositional embedding Fraise uses today (8k base tokens to 64k macros).\n- Independent embeddings, one row per input token.\n\n## Trade-offs and limitations\n- The merge-prefix hierarchy is \"a simple valid hierarchy for experiments, not a vocabulary-selection algorithm\" (README).\n- The composition step runs eagerly, because its sizes depend on the batch; the transformer still compiles.\n- A hierarchy file must stay at its configured path, because resuming re-reads it.\n- Untested: no training run uses it, so whether more levels help is unknown.\n\n## Where it is used\nCode: `src/fraise/hierarchy/`, `model/hierarchy_embedding.py`, `config/hierarchy.py`, `cli/hierarchy.py`; added in commit be312ba (README \"Hierarchical embeddings\"). The Tokenization view of `fraise-web`, and the tokenization workbench extension that ports it, visualise hierarchies. No study uses it yet, so status is `proposed`.",
+      "created_at": "2026-11-10T20:52:05.091Z",
+      "updated_at": "2026-11-11T07:37:07.491Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "6830bb2a421e119b"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "02267bbc14d24f59"
+      },
+      "revision": 2
+    }
+  ]
+}

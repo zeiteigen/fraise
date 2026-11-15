@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "kind": "hypothesis",
+  "exported_by": "ablationkit",
+  "notice": "Exported by AblationKit from the coordinator's research records. Edits here are not read back: use the UI or `ablationkit research`.",
+  "records": [
+    {
+      "schema_version": 1,
+      "record_id": "hyp-20261110-76aef8",
+      "project_id": "fraise",
+      "kind": "hypothesis",
+      "tags": [
+        "poc"
+      ],
+      "links": [
+        {
+          "kind": "task",
+          "id": "task-20261110-apoxgb"
+        }
+      ],
+      "status": "testing",
+      "title": "Fraise gives a favourable quality–compute tradeoff against base 8k and symmetric 64k",
+      "summary": "The project's central claim: Fraise (64k in, 8k out), which reads a 64k macro vocabulary through compositional embeddings and writes the 8k base vocabulary through a small trie-guided local decoder, gives a better tradeoff than the 8k/8k transformer and the 64k/64k transformer on the macro tokenizer between quality in bits per byte (BPB), global transformer computation, sequence and KV-cache length, and access to the text inside tokens, at about the same dense parameter budget on the same text. Still being tested: at equal text the 8k/8k transformer is best in the imported 100M pilot (1.130 BPB against 1.194 and 1.233), but both baselines there were later found to carry two training faults, the equal-compute comparison is not established, and no numeric threshold for 'favourable' has been set.",
+      "body": "## Source\nInferred from `PoC.md` (\"Success Criteria\") and `docs/reports/2026-10-31-fraise-pilot-report.md` §1; wording confirmed by the researcher during onboarding (2026-11-10).\n\n## Mechanism\nA macro token covers 1.705 base tokens on average on held-out text, so a model that reads macros runs about 41% fewer global transformer positions per byte and keeps 41% fewer KV-cache entries. Writing through the 8k base vocabulary keeps the output side small and keeps the text inside each macro reachable, one base token at a time. Whether those savings outweigh any loss of quality is the question.\n\n## How it is tested\n`PoC.md` gives no numeric thresholds for \"favourable\" (pilot report §1, §7.3). Turning it into go/no-go numbers is still an open decision. The comparisons so far are the imported pilot (study \"PoC pilot at 100M\") and learning-rate sweep (study \"LR sweep at 38M\").\n\n## Evidence so far\nValidation bits per byte (BPB), one seed per run, imported from files:\n\n| Model | Pilot, 100M, 500M tokens | Sweep, 38M, 50M tokens (best rate) |\n| --- | ---: | ---: |\n| 8k/8k transformer | 1.130 | 1.409 (AdamW 1e-3) |\n| 64k/64k transformer on the macro tokenizer | 1.194 | 1.560 (3e-3) |\n| Fraise (64k in, 8k out) | 1.233 | 1.541 (3e-3) |\n\nAt equal tokens of text the 8k/8k transformer has the lowest BPB in the pilot; the equal-transformer-compute comparison is not established (pilot report §5.4).\n\nThe gap audit (November 2026) later found that both transformer baselines kept untied input embeddings at N(0,1) and had no final LayerNorm. At 38M parameters, fixing both cut the 64k/64k model's gap to the 8k/8k from 0.152 to 0.085 BPB, and a 64k/64k on a standard BPE matched the 8k/8k. Fraise itself was not re-run.\n\n## What stays open\n- Numeric success thresholds, a deployment setting and a compute budget.\n- The pilot re-run with the two fixes, for all three models.\n- The equal-compute comparison, which needs annealed 8k/8k baselines at reduced budgets.\n- Access to token-internal structure, one of the four axes, is unmeasured: no token-internal evaluation suite exists yet (pilot report §6).",
+      "created_at": "2026-11-10T20:47:51.956Z",
+      "updated_at": "2026-11-11T07:36:13.586Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "6830bb2a421e119b"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "62143a03e6437ad0"
+      },
+      "revision": 2
+    },
+    {
+      "schema_version": 1,
+      "record_id": "hyp-20261110-67fe7f",
+      "project_id": "fraise",
+      "kind": "hypothesis",
+      "tags": [
+        "poc",
+        "fraise-vs-symmetric"
+      ],
+      "links": [
+        {
+          "kind": "task",
+          "id": "task-20261110-apoxgb"
+        }
+      ],
+      "status": "proposed",
+      "title": "Fraise's gap to symmetric comes from slot-0 read-out or global-state quality",
+      "summary": "Claim: Fraise (64k in, 8k out) trails the 64k/64k transformer on the macro tokenizer by 0.039 bits per byte (BPB) in the 100M pilot because of how it predicts the first base token of each next macro ('slot 0'), which carries about 99% of the net deficit: either its global hidden states are less informative, being trained only through the local decoder rather than a 64k-row output head, or the slot-0 read-out path limits them. Proposed, not yet tested; competing explanations (miscalibration, a softmax bottleneck, input-side causes, untuned optimisation) are not ruled out, and cheap tests on the frozen pilot weights are proposed in the pilot report.",
+      "body": "## Source\nInferred from `docs/reports/2026-10-31-fraise-pilot-report.md` §0 (\"Leading hypotheses\", labelled opinion), §5.5 and §7; confirmed by the researcher during onboarding (2026-11-10).\n\n## Mechanism\nFor the macro after position $t$, Fraise's local decoder predicts slot $j = 0, \\dots, k$: slots $0..k-1$ are the macro's base tokens, slot $k$ is END. Every slot starts from the same projection of the global hidden state,\n\n$$\nz_j = W_c\\,\\mathrm{LN}(h_t) + \\sum_{i<j} g'_i \\odot E'[b_i] + s_j\n$$\n\nAt slot 0 the sum over earlier tokens is empty, so the first token of the next macro is predicted from $h_t$ alone through a small decoder, while the 64k/64k model scores the whole next macro with a 64k-row output head on its own state. Slot 0 is where Fraise depends most on $h_t$, and it is where the pilot's per-slot analysis puts the deficit: ≈99% net / ≈93% gross of it (§0, §5.5).\n\n## How it would be tested\nProposed cheap tests on the frozen pilot weights: probes D1–D2 (how much the states carry), attribution D3, and breakdown D5. A slot-0 calibration test (D6) checks the miscalibration alternative post hoc.\n\n## What stays open\nCompeting explanations listed in the report and not ruled out: slot-0 miscalibration (D6), a softmax bottleneck, input-side causes (composed embeddings, near-random residuals of rare macros; B5/E4), and optimisation (an untuned AdamW LR at the grid edge, different clipping; E6).\n\nThe 64k/64k model in this comparison carried the two training faults later found by the gap audit (untied embeddings at N(0,1), no final LayerNorm), while Fraise normalises its state before its decoder. How the Fraise-to-64k/64k gap changes once the baseline is fixed is unmeasured.\n\nThe post-hoc analyses behind §5.5 (`analyze*.py`, `chain.py` and their per-slot output tables `analysis*.log`, `chain.log`) are attached to the imported `pilot-fraise` run; they did not run as tracked AblationKit jobs.",
+      "created_at": "2026-11-10T20:47:56.942Z",
+      "updated_at": "2026-11-11T07:36:13.591Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "6830bb2a421e119b"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "62143a03e6437ad0"
+      },
+      "revision": 3
+    },
+    {
+      "schema_version": 1,
+      "record_id": "hyp-20261110-fd912f",
+      "project_id": "fraise",
+      "kind": "hypothesis",
+      "tags": [
+        "poc",
+        "ablation"
+      ],
+      "links": [
+        {
+          "kind": "task",
+          "id": "task-20261110-apoxgb"
+        }
+      ],
+      "status": "proposed",
+      "title": "Compositional macro embeddings with residuals help rare macros versus independent embeddings",
+      "summary": "Claim: building each macro's input embedding from the embeddings of its base-token constituents plus a small learned 32-dimensional residual lets rare macros fall back on well-trained constituents while frequent ones specialise, giving better bits per byte (BPB), especially on rare macros, than one independent embedding per macro. Proposed, not yet tested: the switch between compositional and independent embeddings is implemented but no ablation has been run, and an unmeasured failure mode is that rarely seen residuals stay near their random initialisation and add noise to the input.",
+      "body": "## Source\nInferred from `PoC.md` (\"Token Representation\", ablation list) and the pilot report §1 / §3.4; confirmed by the researcher during onboarding (2026-11-10).\n\n## Mechanism\nFor a macro $m$ with base-token parts $b_1, \\dots, b_k$ ($k \\le 8$), Fraise's input is\n\n$$\nx(m) = \\sum_{i=1}^{k} g_i \\odot \\frac{E[b_i]}{\\sqrt{k}} + \\lambda(k) + P\\,r(m)\n$$\n\nwith $E$ the 8k base embedding table, $g_i$ per-position gates, $\\lambda(k)$ a length embedding, $r(m) \\in \\mathbb{R}^{32}$ a per-macro residual and $P$ a projection initialised to zero, so every macro starts as its constituents. A macro seen rarely gets few updates to its residual and is represented mostly by its constituents, which are shared with many other macros; a frequent macro can learn a residual of its own. An independent table gives every macro its own full-width row, which rare macros have little data to train.\n\n## How it would be tested\nStages 4–5 are implemented (`macro_embedding: compositional|independent`, `macro_residual_dim`, 0 disables residuals) but have not been ablated at pilot scale. A test compares compositional with independent embeddings, and residuals on or off, at equal text, by BPB overall and by macro frequency band.\n\n## What stays open\n- No ablation has been run.\n- The report flags an unmeasured failure mode: residuals of rarely seen macros stay near their N(0,1) init and could add input noise once the projection $P$ is learned (§3.4). AdamW weight decay shrinks every residual row by only about 24% over the pilot.\n- The base table $E$ also starts at N(0,1); the gap audit found that this initialisation held back the transformer baselines' embeddings, and whether it does the same here is untested.",
+      "created_at": "2026-11-10T20:48:00.598Z",
+      "updated_at": "2026-11-11T07:36:13.595Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "6830bb2a421e119b"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "62143a03e6437ad0"
+      },
+      "revision": 2
+    },
+    {
+      "schema_version": 1,
+      "record_id": "hyp-20261111-821fd1",
+      "project_id": "fraise",
+      "kind": "hypothesis",
+      "tags": [
+        "vocab-gap",
+        "init"
+      ],
+      "links": [
+        {
+          "kind": "task",
+          "id": "task-20261111-ljvjsb"
+        },
+        {
+          "kind": "run",
+          "id": "4e102f8f5a714971a7880f1c6fe334b1"
+        },
+        {
+          "kind": "run",
+          "id": "a9c5f4be2ac344bca94247765977d72a"
+        },
+        {
+          "kind": "run",
+          "id": "602142eeb36c48938a742fbd73aeaf51"
+        },
+        {
+          "kind": "run",
+          "id": "bd1cfd7db3e94eb8a6e922a447d3ab8c"
+        }
+      ],
+      "status": "supported",
+      "title": "Untied input embeddings are effectively frozen at N(0,1) init, which hurts the 64k vocabulary more",
+      "summary": "Claim: the 8k/8k and 64k/64k transformers leave their untied input embeddings at PyTorch's default N(0,1) initialisation, where AdamW's small steps barely move them, and this hurts the 64k vocabulary more. Supported at 38M parameters and 50M tokens of text, one seed: initialising the input embeddings with standard deviation 0.02 improved the 64k/64k transformer on the macro tokenizer by 0.043 bits per byte (BPB, 1.5609 to 1.5180) and the 8k/8k transformer by only 0.001 (1.4087 to 1.4077), shrinking the gap between them from 0.152 to 0.110 BPB, about 28% of it.",
+      "body": "## Mechanism\nPyTorch's `nn.Embedding` draws every entry from N(0,1), and the model code re-initialises only tied weights (`src/fraise/architectures/transformer.py:26`), so the untied input embeddings of both transformers start at unit scale. AdamW moves each entry by at most about the learning rate $\\eta$ per step, so the relative change per step is roughly\n\n$$\n\\frac{|\\Delta w|}{|w|} \\lesssim \\frac{\\eta}{|w|}\n$$\n\nwhich is 0.1–0.3% for $\\eta$ = 1e-3 to 3e-3 and $|w| \\approx 1$, against 5–15% for a GPT-style initialisation with standard deviation 0.02 at a similar learning rate. The embeddings then stay close to random vectors for the whole run.\n\n## Evidence before any training (frozen pilot weights)\n`data/ak/analysis/embedding_drift.py` rebuilds the seed-1337 initial weights and compares them to the final pilot weights (`data/ak/analysis/embedding_drift.json`):\n- pilot-base (8k/8k): median cosine(init, trained) 0.991–0.994 in every frequency band; learned (non-init) component norm ≈3 against an init norm ≈27.7.\n- pilot-symmetric (64k/64k on the macro tokenizer): median cosine 0.935–0.963 for macros seen ≥100 times; learned component ≈6–7.\n- `weights_diag.py`: the input embedding is ~16% (64k/64k) / ~36% (8k/8k) of the final hidden-state norm. There is no final norm, so it feeds lm_head directly.\n\n## How it is tested\nStudy \"gap audit at 38M\": the 8k/8k and 64k/64k transformers at 38M dense parameters on 50M base tokens of FineWeb-Edu (the learning-rate-sweep protocol), with and without the new opt-in setting `embedding_init_std: 0.02`. Prediction: both improve, the 64k/64k more, and the gap narrows.\n\n## Result\nValidation bits per byte (BPB), one seed per cell:\n\n| Model | N(0,1) init | std 0.02 | Change |\n| --- | ---: | ---: | ---: |\n| 8k/8k transformer | 1.4087 | 1.4077 | −0.0009 |\n| 64k/64k transformer on the macro tokenizer | 1.5609 | 1.5180 | −0.0429 |\n| Gap (64k − 8k) | 0.1522 | 0.1103 | −0.0419 |\n\nAs predicted, the 64k model gains far more, and about 28% of the gap goes.\n\n## What stays open\n- One seed per cell; differences under about 0.01 BPB, such as the 8k/8k's −0.0009, are not resolved.\n- Tested only at 38M parameters and 50M tokens; the 100M pilot has not been re-run with the fix.\n- The learning rates were not re-tuned after the change.\n- Fraise's base embedding table also starts at N(0,1) (pilot report §3.4); whether the fix helps Fraise has not been tested.",
+      "created_at": "2026-11-11T04:36:16.484Z",
+      "updated_at": "2026-11-11T07:36:13.567Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "9ea139d6f718b0e8"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "62143a03e6437ad0"
+      },
+      "revision": 3
+    },
+    {
+      "schema_version": 1,
+      "record_id": "hyp-20261111-ad88b7",
+      "project_id": "fraise",
+      "kind": "hypothesis",
+      "tags": [
+        "vocab-gap",
+        "architecture"
+      ],
+      "links": [
+        {
+          "kind": "task",
+          "id": "task-20261111-ljvjsb"
+        },
+        {
+          "kind": "run",
+          "id": "d1b76fbccc634b9e8162c6e42007a055"
+        },
+        {
+          "kind": "run",
+          "id": "66f89726c9c14bc694faf5da8ef418df"
+        }
+      ],
+      "status": "supported",
+      "title": "Missing final LayerNorm before lm_head penalises the 64k transformer",
+      "summary": "Claim: the 8k/8k and 64k/64k transformers feed the last block's unnormalised output straight into the output head, with no final LayerNorm, and this penalises the 64k/64k model. Supported for the 64k/64k transformer on the macro tokenizer at 38M parameters and 50M tokens, one seed, on top of the embedding-initialisation fix: adding the final LayerNorm took it from 1.5180 to 1.4990 bits per byte (BPB, −0.019), while the 8k/8k transformer went from 1.4077 to 1.4139 (+0.006, within plausible seed noise). With both fixes the gap is 0.085 BPB, down from 0.152.",
+      "body": "## Mechanism\nIn the baseline model (`src/fraise/model/model.py`) the forward pass is `lm_head(transformer(token_embedding(x)))`, and `Transformer` ends with the last block's residual add, so the logits are\n\n$$\n\\ell = W\\,h_L + b\n$$\n\nwith $h_L$ the raw residual stream. Pre-LayerNorm transformers usually normalise before the head, $\\ell = W\\,\\mathrm{LN}(h_L) + b$. Fraise already normalises its global state before its local decoder (`model/hierarchical.py:89`, `context_norm`), so the baselines and Fraise also differ here; the pilot report lists that asymmetry as unablated (§3.4, §8).\n\n## How it is tested\nA new opt-in model setting, `final_norm: true`, in the study \"gap audit at 38M\", added on top of the embedding fix (std 0.02) for both transformers. The planned \"final LayerNorm only\" variant, without the embedding fix, was never run.\n\n## Result\nValidation bits per byte (BPB), one seed per cell:\n\n| Model | std 0.02 | std 0.02 + final LayerNorm | Change |\n| --- | ---: | ---: | ---: |\n| 8k/8k transformer | 1.4077 | 1.4139 | +0.0062 |\n| 64k/64k transformer on the macro tokenizer | 1.5180 | 1.4990 | −0.0190 |\n| Gap (64k − 8k) | 0.1103 | 0.0851 | −0.0252 |\n\nThe logged gradient norm of the 64k/64k model, before clipping at 1.0, fell from 0.61–2.97 (steps 100–800, embedding fix only) to 0.23–0.32 with the final LayerNorm, so its updates were no longer clipped at the logged steps.\n\n## What stays open\n- The final LayerNorm was never tried without the embedding fix, so its effect alone is unmeasured.\n- One seed per cell; the 8k/8k's +0.006 is not resolved.\n- Tested only at 38M parameters and 50M tokens.\n- Whether the gain comes from the normalisation itself or from the end of gradient clipping is not separated.",
+      "created_at": "2026-11-11T04:36:16.505Z",
+      "updated_at": "2026-11-11T07:36:13.573Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "9ea139d6f718b0e8"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "62143a03e6437ad0"
+      },
+      "revision": 3
+    },
+    {
+      "schema_version": 1,
+      "record_id": "hyp-20261111-c2ea9a",
+      "project_id": "fraise",
+      "kind": "hypothesis",
+      "tags": [
+        "vocab-gap",
+        "tokenizer"
+      ],
+      "links": [
+        {
+          "kind": "task",
+          "id": "task-20261111-ljvjsb"
+        },
+        {
+          "kind": "study",
+          "id": "vocab-gap-audit-38m"
+        },
+        {
+          "kind": "run",
+          "id": "55dffb830ecc43eab1a9d7bff9923a8d"
+        },
+        {
+          "kind": "run",
+          "id": "d1b76fbccc634b9e8162c6e42007a055"
+        },
+        {
+          "kind": "run",
+          "id": "66f89726c9c14bc694faf5da8ef418df"
+        },
+        {
+          "kind": "run",
+          "id": "602142eeb36c48938a742fbd73aeaf51"
+        },
+        {
+          "kind": "job",
+          "id": "j-6ae5c7204172"
+        },
+        {
+          "kind": "report",
+          "id": "rep-20261111-da2793"
+        }
+      ],
+      "status": "supported",
+      "title": "The remaining 64k/64k deficit comes from the cross-word macro tokenizer, not from a 64k vocabulary",
+      "summary": "Claim: once the two training faults are fixed, what still separates the 64k/64k transformer on the macro tokenizer from the 8k/8k transformer is the macro tokenizer itself, whose merges cross word boundaries, not the size of a 64k vocabulary. Supported at 38M parameters and 50M tokens of text, one seed: with both fixes the macro-tokenizer model scores 1.4990 bits per byte (BPB), while a 64k/64k on a standard word-pretokenized BPE, trained on the same text, scores 1.4045, matching the 8k/8k transformer (1.4077 to 1.4139). A tokenizer confound remains: the new 64k BPE was trained on the same FineWeb-Edu slice as the macro tokenizer, the 8k one on a broader mix.",
+      "created_at": "2026-11-11T06:26:44.260Z",
+      "updated_at": "2026-11-11T07:36:13.576Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "9ea139d6f718b0e8"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "62143a03e6437ad0"
+      },
+      "revision": 2,
+      "body": "## Mechanism\nThe macro tokenizer is a second byte-pair encoding learned over sequences of 8k base-token IDs, with no word pre-tokenizer: only line breaks bound a macro. Its tokens therefore cross words (\" in the United States\" is one macro), and it compresses harder than a standard tokenizer of the same size: 0.59 macros per 8k token, against 0.777 tokens for a standard 64k BPE on the same text.\n\nThat costs the model in two ways. Merges across words make the segmentation depend on text further ahead: on 27,974 validation macros, 8.7% of macro boundaries are decided only by base tokens two or more positions ahead (7.7% at two, 0.9% at three or more). And a model scored only on the canonical segmentation is charged for any probability it puts on other segmentations of the same text. The pilot report attributes most of the macro models' deficit to these boundary (END) decisions, about 0.056 BPB for END alone.\n\n## How it is tested\nA 64k/64k transformer with the same model, training settings and both fixes, but on a standard byte-level BPE of 65,536 tokens, made with the same trainer and word pre-tokenizer as the 8k tokenizer, on the same 0.3 GB FineWeb-Edu slice as the macro tokenizer. Budgets count each tokenizer's own tokens, so they were calibrated to cover the same text: 38,849,560 training and 203,610 validation tokens (0.777 per 8k token); validation covered 971,133 bytes against 971,115 for the 8k/8k.\n\nIf the size of the vocabulary were the cause, this model should trail like the macro-tokenizer model; if the macro tokenizer is the cause, it should match the 8k/8k.\n\n## Result\nValidation bits per byte (BPB), both fixes, 38M parameters, 50M base tokens of text, one seed:\n\n| Model | Optimizer steps | BPB |\n| --- | ---: | ---: |\n| 8k/8k transformer | 1,526 | 1.4139 |\n| 64k/64k on a standard BPE | 1,186 | 1.4045 |\n| 64k/64k transformer on the macro tokenizer | 891 | 1.4990 |\n| 64k/64k transformer on the macro tokenizer, batch 32 | 1,782 | 1.4996 |\n\nThe 8k/8k transformer scored 1.4077 with only the embedding fix and 1.4087 with neither, so the standard 64k BPE matches it whichever 8k row is taken as the reference. The step count does not explain the difference either: the batch-32 run takes twice as many steps and scores the same.\n\n## What stays open\n- Tokenizer corpora differ: the 8k tokenizer was trained on BabyLM, Cosmopedia and FineWeb-Edu, the new 64k BPE on FineWeb-Edu only, so it is more in-domain. An 8k BPE trained on the same slice would remove this confound.\n- One seed; the −0.009 difference to the 8k/8k is not resolved.\n- Run only with both fixes on, and only at 38M parameters and 50M tokens.\n- Fraise reads the same macro tokens; whether word-bounded macro merges would help it is untested."
+    },
+    {
+      "schema_version": 1,
+      "record_id": "hyp-20261111-0f7adf",
+      "project_id": "fraise",
+      "kind": "hypothesis",
+      "tags": [
+        "vocab-gap",
+        "hyperparameters"
+      ],
+      "links": [
+        {
+          "kind": "task",
+          "id": "task-20261111-ljvjsb"
+        },
+        {
+          "kind": "study",
+          "id": "vocab-gap-audit-38m"
+        },
+        {
+          "kind": "run",
+          "id": "a27bc5e0903640f881c6b9e42fe1d819"
+        },
+        {
+          "kind": "run",
+          "id": "d1b76fbccc634b9e8162c6e42007a055"
+        },
+        {
+          "kind": "report",
+          "id": "rep-20261111-da2793"
+        }
+      ],
+      "status": "refuted",
+      "title": "64k/64k trails because it gets fewer optimizer steps at equal text",
+      "summary": "Claim: at equal text, the 64k/64k transformer on the macro tokenizer trails the 8k/8k transformer because it takes fewer optimizer steps; each 512-position window holds about 1.7 times as much text, so at batch 64 it makes 891 steps against 1,526. Refuted at 38M parameters and 50M tokens of text, one seed, with both training fixes on: halving its batch to 32 doubled its steps to 1,782 and gave 1.4996 bits per byte (BPB) against 1.4990, no improvement. Step count does not explain the gap at this scale.",
+      "created_at": "2026-11-11T06:26:44.285Z",
+      "updated_at": "2026-11-11T07:36:13.581Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "9ea139d6f718b0e8"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "62143a03e6437ad0"
+      },
+      "revision": 2,
+      "body": "## Mechanism\nBudgets count base tokens of text, and every model reads windows of 512 positions. A macro covers 1.705 base tokens on held-out text (1.712 on the sweep's training text), so at the same batch in positions the macro model sees about 56k base tokens per step against 32k for the 8k/8k, and finishes the same text in fewer steps:\n\n$$\n\\text{steps} = \\frac{\\text{base-token budget}}{\\text{batch} \\times 512 \\times \\text{base tokens per position}} = \\frac{50{,}000{,}000}{64 \\times 512 \\times 1.712} \\approx 891\n$$\n\nIf fewer, larger steps were what held it back, doubling the steps over the same text should help.\n\n## How it is tested\nIn the study \"gap audit at 38M\": the 64k/64k transformer on the macro tokenizer with both fixes (embedding std 0.02 and a final LayerNorm), AdamW 3e-3, the same text; only the batch changes, from 64 to 32 sequences (minibatch 16 in both).\n\n## Result\n| Batch | Optimizer steps | BPB |\n| ---: | ---: | ---: |\n| 64 | 891 | 1.4990 |\n| 32 | 1,782 | 1.4996 |\n\nThe difference, +0.0006, is far smaller than the 0.085 BPB that separates this model from the 8k/8k transformer with the same fixes.\n\n## What stays open\n- The AdamW learning rate (3e-3) was not re-tuned for batch 32.\n- One seed, 38M parameters only, and tested only with both fixes on.\n- The 100M pilot gave the macro models batch 32 and 17% more steps than the 8k/8k (17,896 against 15,259); this result suggests that choice did not matter much, but the pilot itself was not re-run."
+    }
+  ]
+}

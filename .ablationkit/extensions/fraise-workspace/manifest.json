@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "id": "fraise-workspace",
+  "version": "0.1.0",
+  "name": "Fraise workspace",
+  "description": "fraise-web's Autocomplete, Compare and Train views as project panels: stream continuations from saved checkpoints (same prompt, settings and seed across checkpoints), and check a fresh or resumed training configuration into a plan that the MLproject `launch` entrypoint runs as an AblationKit job. Computed by fraise.workbench in the project environment.",
+  "host_api": "^1.0.0",
+  "contributes": [
+    {
+      "id": "autocomplete",
+      "point": "project.panel",
+      "title": "Autocomplete",
+      "entry": "ui/src/Autocomplete.tsx",
+      "target": "generate"
+    },
+    {
+      "id": "compare",
+      "point": "project.panel",
+      "title": "Compare checkpoints",
+      "entry": "ui/src/Compare.tsx",
+      "target": "generate"
+    },
+    {
+      "id": "train",
+      "point": "project.panel",
+      "title": "Train",
+      "entry": "ui/src/Train.tsx",
+      "target": "plan"
+    },
+    {
+      "id": "runs",
+      "point": "project.analysis",
+      "title": "List saved fraise runs and checkpoints",
+      "entry": "python/workspace.py:runs"
+    },
+    {
+      "id": "generate",
+      "point": "project.analysis",
+      "title": "Continue text with saved checkpoints",
+      "entry": "python/workspace.py:generate"
+    },
+    {
+      "id": "release",
+      "point": "project.analysis",
+      "title": "Unload the loaded checkpoint",
+      "entry": "python/workspace.py:release"
+    },
+    {
+      "id": "inputs",
+      "point": "project.analysis",
+      "title": "Saved Autocomplete inputs",
+      "entry": "python/workspace.py:inputs"
+    },
+    {
+      "id": "train-catalog",
+      "point": "project.analysis",
+      "title": "List architectures, tokenizers and training defaults",
+      "entry": "python/workspace.py:train_catalog"
+    },
+    {
+      "id": "validate",
+      "point": "project.analysis",
+      "title": "Check a training configuration",
+      "entry": "python/workspace.py:validate"
+    },
+    {
+      "id": "plan",
+      "point": "project.analysis",
+      "title": "Write a training launch plan",
+      "entry": "python/workspace.py:plan"
+    }
+  ],
+  "python": {
+    "environment": "project",
+    "requires_python": ">=3.14",
+    "max_runtime_seconds": 900,
+    "max_memory_mb": 12288,
+    "gpu": true,
+    "network": "none",
+    "warm": true
+  },
+  "capabilities": [
+    "project.analysis.execute",
+    "gpu"
+  ]
+}

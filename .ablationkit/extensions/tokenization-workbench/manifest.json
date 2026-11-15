@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "tokenization-workbench",
+  "version": "0.1.0",
+  "name": "Tokenization workbench",
+  "description": "The tokenization workbench (formerly fraise-web's Tokenization view) as a project panel: type text and compare its segmentation and embedding-hierarchy composition side by side (by default the pilot-bpe8k, pilot-macro64k and pilot-fraise runs), computed by fraise's own fraise.workbench.tokenization in the project environment.",
+  "host_api": "^1.0.0",
+  "contributes": [
+    {
+      "id": "panel",
+      "point": "project.panel",
+      "title": "Tokenization workbench",
+      "entry": "ui/src/Workbench.tsx",
+      "target": "tokenize"
+    },
+    {
+      "id": "catalog",
+      "point": "project.analysis",
+      "title": "List fraise tokenizers, runs and hierarchy files",
+      "entry": "python/workbench.py:catalog"
+    },
+    {
+      "id": "tokenize",
+      "point": "project.analysis",
+      "title": "Tokenize text through fraise hierarchies",
+      "entry": "python/workbench.py:tokenize"
+    }
+  ],
+  "python": {
+    "environment": "project",
+    "requires_python": ">=3.14",
+    "max_runtime_seconds": 120,
+    "max_memory_mb": 2048,
+    "gpu": false,
+    "network": "none",
+    "warm": true
+  },
+  "capabilities": [
+    "project.analysis.execute"
+  ]
+}

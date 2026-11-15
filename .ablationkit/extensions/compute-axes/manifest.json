@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "compute-axes",
+  "version": "0.1.0",
+  "name": "Compute-axis comparison",
+  "description": "Pilot report §5.4 as a comparison view: each selected run's final validation BPB against a reference run's validation curve read at equal base tokens, equal training global positions, equal wall-clock, or equal FLOPs (researcher-entered FLOPs per token), computed from the runs' own recorded metrics and params.",
+  "host_api": "^1.0.0",
+  "contributes": [
+    {
+      "id": "compare",
+      "point": "comparison.view",
+      "title": "Compute-axis comparison",
+      "entry": "ui/src/Compare.tsx"
+    }
+  ],
+  "capabilities": ["project.runs.read"]
+}
