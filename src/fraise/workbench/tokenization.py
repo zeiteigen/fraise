@@ -1,4 +1,4 @@
-"""Tokenize text through configurable hierarchies for the visualizer view."""
+"""Tokenize text through configurable hierarchies for the tokenization workbench."""
 
 from collections import OrderedDict
 from pathlib import Path

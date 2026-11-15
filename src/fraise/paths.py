@@ -1,4 +1,4 @@
-"""Resolve the shared data root for commands and notebooks."""
+"""Resolve the shared data root for commands and the workspace panels."""
 
 import os
 from pathlib import Path

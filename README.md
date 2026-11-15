@@ -15,46 +15,45 @@ base output vocabulary, as described in [PoC.md](PoC.md). Implemented stages:
 Multi-token prediction, dynamic decomposition, and variable-resolution KV caches
 remain experiment stages. See [Asymmetric Fraise](#asymmetric-fraise-macro-in-base-out).
 
-## Local model workspace
+## Model workspace (AblationKit)
 
-```sh
-uv sync --extra web
-uv run --extra web fraise-web
-```
+The interactive views run inside [AblationKit](.ablationkit/) as project panels, through
+fraise's own code in `fraise.workbench` (the project environment, at the checkout's current
+commit; commit changes to `fraise.workbench` before rebuilding an extension):
 
-Open **http://127.0.0.1:8000**. The workspace has four views:
-
-- **Autocomplete:** edit a document and generate from the text before the cursor.
-  Review the streamed continuation, then accept it at the saved cursor position
-  or discard it. Accepting replaces any selected text and preserves the rest of
-  the document. Ctrl/Cmd+Enter generates, Tab accepts, and Escape discards; Enter
-  inserts a newline. The model receives raw text without roles or chat templates.
-  Inputs, checkpoint choices, and sampling settings can be restored from browser
-  storage. The inspector shows model dimensions, vocabulary, context limit,
-  checkpoint step, and validation information; generation reports speed and token counts.
-- **Compare:** send the same prompt, sampling settings, and seed to several
-  checkpoints. Outputs include generation speed, loading time, saved settings,
-  tokenizer identity, and available validation results. Validation loss depends
+- **Autocomplete** (`fraise-workspace`): edit a document and generate from the text before the
+  cursor. Review the streamed continuation, then accept it at the saved cursor position or
+  discard it. Accepting replaces any selected text and preserves the rest of the document.
+  Ctrl/Cmd+Enter generates, Tab accepts, and Escape discards. The model receives raw text
+  without roles or chat templates. Inputs, checkpoint choices, and sampling settings are kept in
+  `DATA_DIR/workspace/saved-inputs.json`. The inspector shows model dimensions, vocabulary,
+  context limit, checkpoint step, and validation; generation reports speed and token counts.
+- **Compare checkpoints** (`fraise-workspace`): send the same prompt, sampling settings, and seed
+  to up to eight checkpoints, one after another. Outputs include generation speed, loading time,
+  saved settings, tokenizer identity, and available validation results. Validation loss depends
   on tokenization and is not a direct comparison across different tokenizers.
-- **Tokenization:** inspect how text is segmented and how each input token is
-  composed through an embedding hierarchy; compare several configurations.
-- **Train:** select an existing tokenizer, edit forms or complete JSON settings,
-  launch a new run, or resume a checkpoint. Progress, loss, and logs update live.
-  Stop saves a resumable checkpoint after the current optimizer step; preparation
-  can be canceled before training starts. A stopped run remains unfinished.
+- **Train** (`fraise-workspace`): select a tokenizer, start from an architecture preset or a
+  saved run's configuration, edit forms or complete JSON, check it (parameter count), or resume a
+  checkpoint (only operational settings change). **Prepare** writes a checked plan to
+  `DATA_DIR/launch/<run>/<time>/`.
+- **Tokenization workbench** (`tokenization-workbench`): inspect how text is segmented and how
+  each input token is composed through an embedding hierarchy; compare several configurations.
 
-The server binds to loopback and runs one compute operation at a time. Comparisons
-load models sequentially, and starting training releases the loaded inference
-model. This coordination covers jobs launched through this server. Training
-configuration snapshots, job events, and process logs live in `DATA_DIR/web/jobs`;
-models continue to use the normal run layout. Only operational settings can change
-when resuming. Existing legacy runs can be used for inference; older optimizer or
-manifest formats require migration or a fresh run before resuming.
+Training runs as an AblationKit job from the `MLproject` entrypoints (Runs → More →
+Entrypoints): `launch` takes a plan directory from the Train panel, and `train` takes
+configuration files directly. The job page shows the console; the run page shows loss,
+throughput, and validation by global step (`train --ablationkit-metrics` logs them through the
+`ablationkit_sdk` that AblationKit puts on every job's path). Cancelling the job, or reaching its
+time limit, sends SIGTERM: `train` saves a resumable checkpoint after the current optimizer step
+and exits, so a stopped run remains unfinished and can be resumed from the Train panel. Without
+`--stop-file`, Ctrl+C still interrupts as usual.
 
-Use `--data-dir`, `--models-dir`, `--port`, and `--device auto|cpu|cuda` to select
-local storage and execution settings. The bundled training preset uses FP32,
-eager execution, one epoch, and a small token budget. Datasets are loaded through
-the same source loaders as the CLI and may download when not already cached.
+The panels read runs from `DATA_DIR/models` and tokenizers from `DATA_DIR/tokenizers`. Generation
+uses CUDA when available and keeps the last checkpoint loaded until another is needed, the
+extension's worker idles out, or **Release device memory** is used; nothing coordinates it with
+running training jobs, so release it before training on the same GPU. Existing legacy runs can
+be used for inference; older optimizer or manifest formats require migration or a fresh run
+before resuming. See each extension's README for details.
 
 ## Model architectures
 
@@ -72,8 +71,6 @@ Fraise model.
 
 ```sh
 uv sync
-# For the notebooks:
-uv sync --extra notebooks
 ```
 
 The application is packaged under `fraise`. Commands use `./data` as the shared
@@ -152,7 +149,7 @@ tokens, while training loss stays the mean over the model's own targets.
 Validation reports bits per byte as well as loss whenever the base tokenizer is
 byte-level BPE: summed negative log-likelihood in bits divided by the UTF-8 bytes
 of the scored targets. BPB compares models with different tokenizers, which
-token losses do not. It appears in the log, in `validation_results`, in the web
+token losses do not. It appears in the log, in `validation_results`, in the workspace
 inspector, and in `score_text`.
 
 ## Configure and train
@@ -461,9 +458,8 @@ schema-2/3 checkpoints load with an allowlist of the NumPy array types they cont
 uv run checkpoint-to-model CHECKPOINT.pt OUTPUT.pt
 ```
 
-Reusable inference functions live in `fraise.inference`. The notebooks in
-`notebooks/` call the same run loader, scoring, generation, and benchmark
-functions. Run loading preserves weight tying and the archived tokenizer.
+Reusable inference functions live in `fraise.inference`; the workspace panels
+call the same run loader and generation functions. Run loading preserves weight tying and the archived tokenizer.
 Generation and the benchmark decode with a key/value cache and project only
 the last position onto the vocabulary. Once a sequence exceeds `max_seq_len`, the
 context window slides and each step recomputes the visible window. Positive
@@ -618,8 +614,7 @@ residuals use AdamW with weight decay like the two-level residual table.
 validates and writes either format and returns the sha256; `config_levels()`
 returns the matching `levels` list.
 
-**Visualizer.** `uv run --extra web fraise-web`, then open **Tokenization**
-(`http://127.0.0.1:8000/#tokens`). Enter any text and add up to six
+**Visualizer.** In AblationKit, open the project's **Tokenization workbench** panel. Enter any text and add up to six
 configurations to compare: a macro tokenizer's default two-level hierarchy,
 merge-prefix levels typed as sizes, a file in `DATA_DIR/hierarchies/`, or the
 hierarchy stored in a saved run's checkpoint. Each result separates **text

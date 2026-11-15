@@ -9,7 +9,7 @@ Two different things are reported and must not be confused:
   the hierarchy's intermediate levels. Intermediate nodes never become
   transformer positions; they are representation layers.
 
-The result is plain JSON for the web visualizer, notebooks, and the CLI.
+The result is plain JSON for the tokenization workbench and the CLI.
 """
 
 import numpy as np

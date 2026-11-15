@@ -1,7 +1,9 @@
-"""Present architecture settings and validate submitted training configurations."""
+"""Describe architectures, validate training configurations and write launch plans."""
 
 from copy import deepcopy
 from dataclasses import asdict, fields
+from datetime import datetime, timezone
+from pathlib import Path
 
 import torch
 
@@ -9,7 +11,7 @@ from fraise.architectures import list_architectures, model_config_from_dict
 from fraise.config.compatibility import check_compatibility
 from fraise.config.training import TrainingSettings
 from fraise.data.sources import SOURCE_NAMES
-from fraise.io import read_json
+from fraise.io import read_json, write_json
 from fraise.model.parameters import estimate_parameter_count
 from fraise.tokenizer.loading import load_tokenizer, tokenizer_fingerprint
 from fraise.training.run.manifest import check_resume_identity
@@ -70,8 +72,25 @@ def describe_architectures():
     return records
 
 
+def training_catalog(catalog, device):
+    """What the Train panel offers: architectures with their fields, tokenizers, data sources,
+    default settings, the settings a resume may change, and the device."""
+    from fraise.architectures import get_architecture
+    from fraise.training.run.manifest import OPERATIONAL_SETTINGS
+
+    return {
+        "architectures": describe_architectures(),
+        "tokenizers": catalog.tokenizers(),
+        "sources": list(SOURCE_NAMES),
+        "model_defaults": dict(get_architecture("transformer").example_config),
+        "training_defaults": training_defaults(),
+        "operational_settings": sorted(OPERATIONAL_SETTINGS),
+        "device": device,
+    }
+
+
 def validate_training(request, catalog, device):
-    config = model_config_from_dict(request.configuration)
+    config = model_config_from_dict(request.model_config)
     settings = TrainingSettings.from_dict(request.training_config)
     settings.validate_sources(SOURCE_NAMES)
     tokenizer = load_tokenizer(catalog.tokenizer_path(request.tokenizer_id))
@@ -110,3 +129,46 @@ def validate_training(request, catalog, device):
         "training_config": asdict(settings),
         "parameter_count": estimate_parameter_count(config),
     }, resume_path
+
+
+def resolve_device(requested="auto"):
+    available = torch.cuda.is_available()
+    if requested in (None, "auto"):
+        return "cuda" if available else "cpu"
+    if requested not in ("cpu", "cuda"):
+        raise ValueError("device must be auto, cpu, or cuda")
+    if requested == "cuda" and not available:
+        raise ValueError("CUDA was requested but is unavailable")
+    return requested
+
+
+def write_plan(request, catalog, device, root):
+    """Validate ``request`` and write what the ``launch`` entrypoint runs.
+
+    A new directory ``root/<run name>/<UTC time>`` receives the normalized ``model.json`` and
+    ``training.json`` and a ``plan.json`` naming the tokenizer, data and run directories, the
+    device and, when resuming, the checkpoint. Returns the plan with its ``directory``.
+    """
+    normalized, resume = validate_training(request, catalog, device)
+    root = Path(root)
+    parent = contained(root / artifact_name(request.run_name), root)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    directory, index = parent / stamp, 2
+    while directory.exists():
+        directory, index = parent / f"{stamp}-{index}", index + 1
+    directory.mkdir(parents=True)
+    write_json(directory / "model.json", normalized["model_config"])
+    write_json(directory / "training.json", normalized["training_config"])
+    plan = {
+        "run_name": request.run_name,
+        "mode": "resume" if resume is not None else "fresh",
+        "tokenizer_file": str(catalog.tokenizer_path(request.tokenizer_id)),
+        "data_dir": str(catalog.data_dir),
+        "save_path": str(catalog.models_dir),
+        "device": device,
+        "resume": str(resume) if resume is not None else None,
+        "parameter_count": normalized["parameter_count"],
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    write_json(directory / "plan.json", plan)
+    return {**plan, "directory": str(directory)}

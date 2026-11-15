@@ -1,0 +1,22 @@
+name: fraise
+
+# Launched from AblationKit's Runs -> Entrypoints as ordinary jobs (console, Cancel, MLflow run).
+# Cancel or a time limit saves a resumable checkpoint after the current optimizer step.
+entry_points:
+  # A fresh or resumed run prepared and checked in the Train panel: paste the plan directory it shows.
+  launch:
+    parameters:
+      plan: path
+    command: "python -m fraise.cli.launch {plan}"
+
+  # A fresh run from configuration files, without the Train panel.
+  train:
+    parameters:
+      model_config: path
+      training_config: path
+      tokenizer: path
+      run_name: string
+      device: {type: string, default: cuda}
+      data_dir: {type: path, default: data}
+      save_path: {type: path, default: data/models}
+    command: "train --model-config {model_config} --training-hyperparameters {training_config} --tokenizer-file {tokenizer} --model-name {run_name} --device {device} --data-dir {data_dir} --save-path {save_path} --ablationkit-metrics"

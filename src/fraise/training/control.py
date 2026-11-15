@@ -1,4 +1,4 @@
-"""Translate local Stop requests into safe training-boundary cancellation."""
+"""Translate stop requests into safe training-boundary cancellation."""
 
 import signal
 from contextlib import contextmanager
@@ -6,8 +6,14 @@ from contextlib import contextmanager
 
 @contextmanager
 def stop_signals(stop_file, callback):
-    """Interrupt preparation, but never interrupt a running optimizer update."""
+    """Save and stop after the current optimizer update when asked; never interrupt one.
+
+    SIGTERM (an AblationKit job's Cancel or time limit) always asks; SIGINT asks when a stop
+    file is given (fraise-web's Stop), and otherwise keeps its usual meaning. Before training
+    starts, a request interrupts preparation instead. Yields ``(on_event, stop_requested)``.
+    """
     training = False
+    requested = False
 
     def on_event(event):
         nonlocal training
@@ -17,15 +23,20 @@ def stop_signals(stop_file, callback):
             callback(event)
 
     def interrupt(signum, frame):
-        stop_file.touch()
+        nonlocal requested
+        requested = True
+        if stop_file is not None:
+            stop_file.touch()
         if not training:
             raise KeyboardInterrupt
 
-    previous = None
-    if stop_file is not None:
-        previous = signal.signal(signal.SIGINT, interrupt)
+    def stop_requested():
+        return requested or (stop_file is not None and stop_file.exists())
+
+    handled = [signal.SIGTERM] + ([signal.SIGINT] if stop_file is not None else [])
+    previous = {number: signal.signal(number, interrupt) for number in handled}
     try:
-        yield on_event
+        yield on_event, stop_requested
     finally:
-        if previous is not None:
-            signal.signal(signal.SIGINT, previous)
+        for number, handler in previous.items():
+            signal.signal(number, handler)
