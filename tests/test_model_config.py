@@ -10,6 +10,7 @@ from fraise.config.model import ModelConfig
 class ModelConfigTests(unittest.TestCase):
     def setUp(self):
         self.config = {
+            "architecture": "transformer",
             "vocab_size": 8,
             "residual_stream_dim": 8,
             "head_dim": 4,

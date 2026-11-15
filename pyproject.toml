@@ -25,7 +25,6 @@ train = "fraise.cli.train:main"
 visualize-training-data = "fraise.cli.visualize_training_data:main"
 params = "fraise.cli.calculate_params:main"
 checkpoint-to-model = "fraise.cli.checkpoint_to_model:main"
-migrate-run = "fraise.cli.migrate_run:main"
 fraise-hierarchy = "fraise.cli.hierarchy:main"
 
 [build-system]

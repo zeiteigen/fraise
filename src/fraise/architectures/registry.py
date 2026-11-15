@@ -59,11 +59,14 @@ def list_architectures() -> tuple[ArchitectureSpec, ...]:
 
 
 def model_config_from_dict(values: Mapping[str, object]) -> ModelConfigProtocol:
-    """Parse architecture-specific settings; omitted IDs select the baseline."""
+    """Parse architecture-specific settings; the configuration names its architecture."""
     if not isinstance(values, Mapping):
         raise TypeError("model configuration must be a JSON object")
     values = dict(values)
-    values.setdefault("architecture", "transformer")
+    if "architecture" not in values:
+        _load_builtin()
+        names = ", ".join(repr(name) for name in _architectures)
+        raise ValueError(f'model configuration needs "architecture" ({names})')
     spec = get_architecture(values["architecture"])
     return spec.config_type(**values)
 

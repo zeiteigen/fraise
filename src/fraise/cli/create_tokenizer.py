@@ -9,7 +9,6 @@ from fraise.data.sources import SOURCE_NAMES
 from fraise.tokenizer.artifacts import create_macro_tokenizer, create_tokenizer
 from fraise.tokenizer.loading import load_tokenizer
 from fraise.tokenizer.macro_training import DEFAULT_MAX_MACRO_LENGTH
-from fraise.tokenizer.migration import migrate_metadata
 
 from .common import add_data_dir, cli_errors
 
@@ -40,14 +39,10 @@ def main(argv=None):
         default=DEFAULT_MAX_MACRO_LENGTH,
         help="maximum base tokens per macro (with --base-tokenizer)",
     )
-    parser.add_argument("--migrate-metadata", action="store_true")
     add_data_dir(parser)
     args = parser.parse_args(argv)
     with cli_errors(parser):
         directory = args.data_dir / "tokenizers"
-        if args.migrate_metadata:
-            print(f"Migrated {migrate_metadata(directory)} tokenizer records")
-            return
         if not args.sources:
             parser.error("--sources is required when creating a tokenizer")
         integer("vocab_size", args.vocab_size, 259)

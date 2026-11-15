@@ -25,9 +25,7 @@ def read_metadata(directory: Path) -> list[dict]:
         not isinstance(record, dict) or record.get("schema_version") != SCHEMA_VERSION
         for record in records
     ):
-        raise ValueError(
-            "legacy tokenizer metadata: run create-tokenizer --migrate-metadata"
-        )
+        raise ValueError(f"unsupported tokenizer metadata in {path}")
     return records
 
 

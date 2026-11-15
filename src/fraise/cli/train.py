@@ -9,7 +9,7 @@ from fraise.data.loading import load_training_data
 from fraise.data.sources import SOURCE_NAMES
 from fraise.tokenizer.loading import load_tokenizer
 from fraise.training.run.artifacts import read_run_model_name
-from fraise.training.training import pretrain_transformer
+from fraise.training.training import pretrain_model
 from fraise.training.events import AblationKitMetrics, EventWriter, emit, fan_out
 from fraise.training.control import stop_signals
 
@@ -74,7 +74,7 @@ def main(argv=None):
         if stop_requested():
             emit(on_event, "stopped", phase="loading")
             return
-        pretrain_transformer(
+        pretrain_model(
             tokenizer,
             data,
             settings,

@@ -108,10 +108,12 @@ class ArchitectureTests(unittest.TestCase):
         cls.addClassCleanup(registry.stop)
         register_architecture(TINY)
 
-    def test_baseline_legacy_config_and_registered_config_parse(self):
-        legacy = asdict(tiny_config())
-        del legacy["architecture"]
-        self.assertEqual(model_config_from_dict(legacy), tiny_config())
+    def test_configs_name_their_architecture_and_registered_config_parse(self):
+        unnamed = asdict(tiny_config())
+        del unnamed["architecture"]
+        with self.assertRaisesRegex(ValueError, 'needs "architecture"'):
+            model_config_from_dict(unnamed)
+        self.assertEqual(model_config_from_dict(asdict(tiny_config())), tiny_config())
         self.assertEqual(model_config_from_dict(TINY.example_config), TinyConfig())
         with TemporaryDirectory() as directory:
             path = Path(directory) / "model.json"
@@ -229,7 +231,7 @@ class ArchitectureTests(unittest.TestCase):
                 resumed.model.state_dict()[key], value, rtol=0, atol=0
             )
 
-    def test_resume_normalizes_legacy_baseline_architecture(self):
+    def test_resume_refuses_manifests_without_an_architecture(self):
         current = run_manifest(
             tiny_data(),
             tiny_tokenizer(),
@@ -239,7 +241,9 @@ class ArchitectureTests(unittest.TestCase):
         )
         saved = deepcopy(current)
         del saved["identity"]["model_config"]["architecture"]
-        check_resume_identity(saved, current)
+        with self.assertRaisesRegex(ValueError, 'needs "architecture"'):
+            check_resume_identity(saved, current)
+        check_resume_identity(current, deepcopy(current))
         changed = deepcopy(current)
         changed["identity"]["model_config"] = asdict(TinyConfig())
         with self.assertRaisesRegex(ValueError, "resume model_config"):
@@ -281,16 +285,6 @@ class ArchitectureTests(unittest.TestCase):
                 torch.testing.assert_close(
                     resumed.state_dict()[key], value, rtol=0, atol=0
                 )
-
-    def test_non_baseline_raw_weights_preserve_legacy_looking_names(self):
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "weights.pt"
-            weights = {"token_embedding.embedding.weight": torch.ones(2, 2)}
-            save_model_state_dict(weights, path)
-            self.assertEqual(
-                load_model_weights(path, migrate_legacy=False).keys(), weights.keys()
-            )
-            self.assertEqual(set(load_model_weights(path)), {"token_embedding.weight"})
 
     def test_spawned_validator_uses_parent_registered_architecture(self):
         config, settings = (

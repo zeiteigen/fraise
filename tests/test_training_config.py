@@ -7,7 +7,7 @@ from fraise.config.training import TrainingSettings
 
 
 class TrainingConfigTests(unittest.TestCase):
-    def test_shuffle_flags_are_independent_and_legacy_shuffle_maps_to_per_epoch(self):
+    def test_shuffle_flags_are_independent(self):
         values = asdict(tiny_settings())
         del values["shuffle_per_epoch"]
         del values["shuffle_data"]
@@ -26,29 +26,17 @@ class TrainingConfigTests(unittest.TestCase):
                     )
                     self.assertIs(settings.shuffle_per_epoch, per_epoch)
                     self.assertIs(settings.shuffle_data, mixed)
-        legacy = TrainingSettings.from_dict(values | {"shuffle": False})
-        self.assertFalse(legacy.shuffle_per_epoch)
-        self.assertFalse(legacy.shuffle_data)
-        with self.assertRaisesRegex(ValueError, "must agree"):
-            TrainingSettings.from_dict(
-                values | {"shuffle": True, "shuffle_per_epoch": False}
-            )
+        with self.assertRaises(TypeError):
+            TrainingSettings.from_dict(values | {"shuffle": False})
 
     def test_accumulation_is_derived_from_minibatch_size(self):
-        for extra in (
-            {"minibatch_size": 2},
-            {"gradient_accumulation_steps": 4},
-            {"minibatch_size": 2, "gradient_accumulation_steps": 4},
-        ):
-            settings = tiny_settings(batch_size=8, **extra)
-            self.assertEqual(settings.minibatch_size, 2)
-            self.assertEqual(settings.gradient_accumulation_steps, 4)
+        settings = tiny_settings(batch_size=8, minibatch_size=2)
+        self.assertEqual(settings.minibatch_size, 2)
+        self.assertEqual(settings.gradient_accumulation_steps, 4)
         for extra in (
             {"minibatch_size": 0},
-            {"gradient_accumulation_steps": True},
             {"minibatch_size": 3},
-            {"gradient_accumulation_steps": 3},
-            {"minibatch_size": 2, "gradient_accumulation_steps": 3},
+            {"gradient_accumulation_steps": 4},
         ):
             with self.subTest(extra=extra), self.assertRaises((ValueError, TypeError)):
                 tiny_settings(batch_size=8, **extra)

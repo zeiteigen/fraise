@@ -41,11 +41,11 @@ sys.path = [str(target)] + [path for path in sys.path if not pathlib.Path(path).
 import fraise
 assert pathlib.Path(fraise.__file__).is_relative_to(target), fraise.__file__
 from fraise.model.model import FraiseModel
-from fraise.training.training import pretrain_transformer
+from fraise.training.training import pretrain_model
 from fraise.tokenizer.loading import load_tokenizer
 from fraise.data.loading import load_training_data
 entries = importlib.metadata.distribution("fraise").entry_points
-assert {entry.name for entry in entries} == {"train", "create-tokenizer", "visualize-training-data", "params", "checkpoint-to-model", "migrate-run", "fraise-hierarchy"}
+assert {entry.name for entry in entries} == {"train", "create-tokenizer", "visualize-training-data", "params", "checkpoint-to-model", "fraise-hierarchy"}
 from fraise.workbench.training import write_plan
 from fraise.cli.launch import train_arguments
 for entry in entries:

@@ -27,8 +27,6 @@ OPERATIONAL_SETTINGS = frozenset(
         "validation_timeout_seconds",
     }
 )
-# Keys older manifests used that TrainingSettings.from_dict still translates.
-_LEGACY_TRAINING_KEYS = frozenset({"shuffle", "gradient_accumulation_steps"})
 
 
 def run_manifest(data, tokenizer, model_config, settings, device) -> dict:
@@ -81,23 +79,13 @@ def run_manifest(data, tokenizer, model_config, settings, device) -> dict:
 
 def check_resume_identity(saved: dict, current: dict):
     if saved.get("manifest_version") != 2:
-        raise ValueError(
-            "legacy run manifest requires migration before training can resume"
-        )
+        raise ValueError("run manifest is not version 2; start a fresh run")
     before, after = saved["identity"], current["identity"]
-    if before.get("optimizer", "adamw") != after.get("optimizer", "adamw"):
-        raise ValueError(
-            "resume optimizer does not match the saved run; start a fresh run"
-        )
-    if (
-        before.get("token_budget_scope", "total")
-        != after.get("token_budget_scope", "total")
-        and max(before["training"]["num_epochs"], after["training"]["num_epochs"]) > 1
-    ):
-        raise ValueError(
-            "resume token budget scope does not match the saved run; "
-            "start a fresh run to use per-epoch budgets with a new learning-rate schedule"
-        )
+    for name, label in (("optimizer", "optimizer"), ("token_budget_scope", "token budget scope")):
+        if before.get(name) != after[name]:
+            raise ValueError(
+                f"resume {label} does not match the saved run; start a fresh run"
+            )
     for name in ("model_config", "training", "dataset", "tokenizer"):
         previous = before[name]
         current = after[name]
@@ -112,8 +100,8 @@ def check_resume_identity(saved: dict, current: dict):
 
 
 def _training_identity(values: dict) -> dict:
-    """Normalize saved settings through today's defaults and legacy translations."""
-    known = {field.name for field in fields(TrainingSettings)} | _LEGACY_TRAINING_KEYS
+    """Normalize saved settings through today's defaults."""
+    known = {field.name for field in fields(TrainingSettings)}
     settings = TrainingSettings.from_dict(
         {key: value for key, value in values.items() if key in known}
     )

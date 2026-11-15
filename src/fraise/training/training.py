@@ -185,6 +185,3 @@ def pretrain_model(
         run.finish(runtime, state, validation, stop_requested=stop_requested)
     return runtime.model
 
-
-# Retain the original Python/notebook entry point.
-pretrain_transformer = pretrain_model

@@ -22,7 +22,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import torch
 from fixtures import tiny_config, tiny_settings, tiny_tokenizer, tiny_data
-from fraise.training.training import pretrain_transformer
+from fraise.training.training import pretrain_model
 from fraise.training.run.checkpoints import load_checkpoint_file
 
 settings = tiny_settings(
@@ -32,10 +32,10 @@ settings = tiny_settings(
 )
 with TemporaryDirectory() as directory:
     args = (tiny_tokenizer(), tiny_data(), settings, tiny_config(), directory, 'tiny')
-    pretrain_transformer(*args, device='cuda')
+    pretrain_model(*args, device='cuda')
     run = Path(directory) / 'tiny'
     expected = load_checkpoint_file(run / 'checkpoint_step_00000003.pt')
-    pretrain_transformer(*args, resume_from=run / 'checkpoint_step_00000001.pt', device='cuda')
+    pretrain_model(*args, resume_from=run / 'checkpoint_step_00000001.pt', device='cuda')
     actual = load_checkpoint_file(run / 'checkpoint_step_00000003.pt')
     for name, tensor in expected['model_state_dict'].items():
         assert torch.equal(tensor, actual['model_state_dict'][name]), name

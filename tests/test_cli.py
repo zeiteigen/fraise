@@ -16,7 +16,7 @@ class CommandTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             patch.object(train, "SOURCE_NAMES", ("fixture",)),
             patch.object(train, "load_training_data", return_value=tiny_data()) as load,
-            patch.object(train, "pretrain_transformer"),
+            patch.object(train, "pretrain_model"),
         ):
             root = Path(directory)
             arguments = self.write_inputs(root)

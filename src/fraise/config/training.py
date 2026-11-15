@@ -123,32 +123,6 @@ class TrainingSettings:
 
     @classmethod
     def from_dict(cls, values: dict) -> TrainingSettings:
-        values = dict(values)
-        if "shuffle" in values:
-            legacy_shuffle = values.pop("shuffle")
-            if type(legacy_shuffle) is not bool:
-                raise TypeError("shuffle must be a bool")
-            if (
-                "shuffle_per_epoch" in values
-                and values["shuffle_per_epoch"] != legacy_shuffle
-            ):
-                raise ValueError(
-                    "shuffle and shuffle_per_epoch must agree when both are supplied"
-                )
-            values.setdefault("shuffle_per_epoch", legacy_shuffle)
-        has_accumulation = "gradient_accumulation_steps" in values
-        accumulation = values.pop("gradient_accumulation_steps", None)
-        if has_accumulation:
-            integer("gradient_accumulation_steps", accumulation)
-            integer("batch_size", values.get("batch_size"))
-            if values["batch_size"] % accumulation:
-                raise ValueError("gradient_accumulation_steps must divide batch_size")
-            minibatch = values["batch_size"] // accumulation
-            if "minibatch_size" in values and values["minibatch_size"] != minibatch:
-                raise ValueError(
-                    "minibatch_size * gradient_accumulation_steps must equal batch_size"
-                )
-            values["minibatch_size"] = minibatch
         return cls(**values)
 
     def validate_sources(self, names: Collection[str]) -> None:

@@ -7,7 +7,7 @@ import torch
 from fixtures import eager_loss, tiny_config, tiny_data, tiny_settings, tiny_tokenizer
 
 from fraise.io import read_json
-from fraise.training.training import pretrain_transformer
+from fraise.training.training import pretrain_model
 
 
 class TrainingRunTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class TrainingRunTests(unittest.TestCase):
                 eager_loss(),
                 patch("fraise.training.validation.runner.ValidationProcess") as worker,
             ):
-                pretrain_transformer(
+                pretrain_model(
                     tiny_tokenizer(),
                     data,
                     tiny_settings(
@@ -66,7 +66,7 @@ class TrainingRunTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             eager_loss(),
         ):
-            pretrain_transformer(
+            pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(validation=True),
                 settings,
@@ -100,7 +100,7 @@ class TrainingRunTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             eager_loss(),
         ):
-            pretrain_transformer(
+            pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(),
                 tiny_settings(checkpoint_keep_last=1),
@@ -132,7 +132,7 @@ class TrainingRunTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             eager_loss(),
         ):
-            original = pretrain_transformer(
+            original = pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(),
                 settings,
@@ -143,7 +143,7 @@ class TrainingRunTests(unittest.TestCase):
             )
             run = Path(directory) / "tiny"
             checkpoint = run / "checkpoint_step_00000001.pt"
-            resumed = pretrain_transformer(
+            resumed = pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(),
                 settings,
@@ -166,7 +166,7 @@ class TrainingRunTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             eager_loss(),
         ):
-            pretrain_transformer(
+            pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(validation=True),
                 tiny_settings(max_validation_tokens=4),
@@ -215,7 +215,7 @@ class TrainingRunTests(unittest.TestCase):
             patch.object(RunArtifacts, "finish", inspect_finish),
         ):
             settings = tiny_settings(max_validation_tokens=4)
-            pretrain_transformer(
+            pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(validation=True),
                 settings,
@@ -225,7 +225,7 @@ class TrainingRunTests(unittest.TestCase):
                 device="cpu",
             )
             checkpoint = Path(directory) / "tiny" / "checkpoint_step_00000001.pt"
-            pretrain_transformer(
+            pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(validation=True),
                 settings,
@@ -263,7 +263,7 @@ class TrainingRunTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             eager_loss(),
         ):
-            expected = pretrain_transformer(
+            expected = pretrain_model(
                 tiny_tokenizer(),
                 data,
                 settings,
@@ -281,7 +281,7 @@ class TrainingRunTests(unittest.TestCase):
             self.assertEqual(final["scheduler_state_dict"]["last_epoch"], 8)
             for step in (1, 4, 5, 8):
                 checkpoint = Path(directory) / "tiny" / f"checkpoint_step_{step:08d}.pt"
-                resumed = pretrain_transformer(
+                resumed = pretrain_model(
                     tiny_tokenizer(),
                     data,
                     settings,
@@ -304,7 +304,7 @@ class TrainingRunTests(unittest.TestCase):
                 patch("fraise.training.training.prepare_data") as prepare,
                 self.assertRaisesRegex(FileExistsError, "not empty"),
             ):
-                pretrain_transformer(
+                pretrain_model(
                     tiny_tokenizer(),
                     tiny_data(),
                     tiny_settings(),
@@ -320,7 +320,7 @@ class TrainingRunTests(unittest.TestCase):
             TemporaryDirectory() as directory,
             eager_loss(),
         ):
-            pretrain_transformer(
+            pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(),
                 tiny_settings(),
@@ -333,7 +333,7 @@ class TrainingRunTests(unittest.TestCase):
                 patch("fraise.training.training.prepare_data") as prepare,
                 self.assertRaisesRegex(ValueError, "resume training does not match"),
             ):
-                pretrain_transformer(
+                pretrain_model(
                     tiny_tokenizer(),
                     tiny_data(),
                     tiny_settings(learning_rate=2e-3),
@@ -356,7 +356,7 @@ class TrainingRunTests(unittest.TestCase):
             eager_loss(),
         ):
             run = Path(directory) / "tiny"
-            pretrain_transformer(
+            pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(),
                 settings,
@@ -369,7 +369,7 @@ class TrainingRunTests(unittest.TestCase):
                 sorted(path.name for path in run.glob("checkpoint_step_*.pt")),
                 ["checkpoint_step_00000002.pt", "checkpoint_step_00000003.pt"],
             )
-            pretrain_transformer(
+            pretrain_model(
                 tiny_tokenizer(),
                 tiny_data(),
                 settings,

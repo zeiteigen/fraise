@@ -11,8 +11,8 @@ from fraise.io import atomic_write
 from .rng import capture_rng_state, restore_rng_state
 
 SCHEMA_VERSION = 4
-# Schema 2 and 3 checkpoints pickled NumPy's RNG state; allow only those types.
-_LEGACY_NUMPY_GLOBALS = [
+# Schema 3 checkpoints pickled NumPy's RNG state; allow only those types.
+_SCHEMA_3_NUMPY_GLOBALS = [
     np._core.multiarray._reconstruct,
     np.ndarray,
     np.dtype,
@@ -40,19 +40,8 @@ def save_model_state_dict(state_dict, path: str | Path) -> Path:
     )
 
 
-def migrate_v2_weights(weights: dict) -> dict:
-    """Translate the old wrapper names at the checkpoint-format boundary."""
-    return {
-        name.replace("token_embedding.embedding.", "token_embedding.")
-        .replace("lm_head.projection.", "lm_head.")
-        .replace(".swiGLU.", ".swiglu."): value
-        for name, value in weights.items()
-    }
-
-
 def _validate_checkpoint(checkpoint, path) -> dict:
     if not isinstance(checkpoint, dict) or checkpoint.get("schema_version") not in (
-        2,
         3,
         SCHEMA_VERSION,
     ):
@@ -69,18 +58,13 @@ def _validate_checkpoint(checkpoint, path) -> dict:
     for name in required:
         if not isinstance(checkpoint[name], dict):
             raise ValueError(f"checkpoint {name} must be a dictionary: {path}")
-    if checkpoint["schema_version"] == 2:
-        checkpoint["training_state"].pop("epoch_tokens_seen", None)
-        checkpoint["model_state_dict"] = migrate_v2_weights(
-            checkpoint["model_state_dict"]
-        )
     return checkpoint
 
 
 def _safe_load(path: str | Path, *, mmap: bool = False):
     """Load tensors and plain containers only; never execute pickled code."""
     try:
-        with torch.serialization.safe_globals(_LEGACY_NUMPY_GLOBALS):
+        with torch.serialization.safe_globals(_SCHEMA_3_NUMPY_GLOBALS):
             return torch.load(path, map_location="cpu", weights_only=True, mmap=mmap)
     except pickle.UnpicklingError as error:
         raise ValueError(
@@ -92,7 +76,7 @@ def load_checkpoint_file(path: str | Path, *, mmap: bool = False) -> dict:
     return _validate_checkpoint(_safe_load(path, mmap=mmap), path)
 
 
-def load_model_weights(path: str | Path, *, migrate_legacy: bool = True) -> dict:
+def load_model_weights(path: str | Path) -> dict:
     weights = _safe_load(path)
     if isinstance(weights, dict) and "schema_version" in weights:
         return _validate_checkpoint(weights, path)["model_state_dict"]
@@ -102,7 +86,7 @@ def load_model_weights(path: str | Path, *, migrate_legacy: bool = True) -> dict
         or any(not isinstance(value, torch.Tensor) for value in weights.values())
     ):
         raise ValueError(f"expected model weights: {path}")
-    return migrate_v2_weights(weights) if migrate_legacy else weights
+    return weights
 
 
 class CheckpointStore:

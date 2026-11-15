@@ -35,10 +35,7 @@ def load_run(
 ) -> LoadedRun:
     directory = Path(directory).expanduser()
     metadata = read_json(directory / META_FILE_NAME)
-    manifest = metadata["manifest"]
-    identity = (
-        manifest["identity"] if manifest.get("manifest_version") == 2 else manifest
-    )
+    identity = metadata["manifest"]["identity"]
     config = model_config_from_dict(identity["model_config"])
     tokenizer = load_tokenizer(directory / metadata["tokenizer_file"])
     if tokenizer.get_vocab_size() != config.vocab_size:
@@ -54,9 +51,7 @@ def load_run(
     else:
         path = resolve_checkpoint(directory)
     model = build_model(config)
-    model.load_state_dict(
-        load_model_weights(path, migrate_legacy=config.architecture == "transformer")
-    )
+    model.load_state_dict(load_model_weights(path))
     model.to(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     model.eval()
     return LoadedRun(model, tokenizer, config, path)

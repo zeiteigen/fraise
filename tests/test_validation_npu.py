@@ -107,7 +107,7 @@ class NpuHardwareTests(unittest.TestCase):
     def test_checkpoint_worker_reports_npu_losses_for_every_checkpoint(self):
         from fraise.training.pipeline.preparation import prepare_data
         from fraise.training.run.checkpoints import load_checkpoint_file
-        from fraise.training.training import pretrain_transformer
+        from fraise.training.training import pretrain_model
         from fraise.training.validation.evaluate import evaluate
 
         with (
@@ -120,7 +120,7 @@ class NpuHardwareTests(unittest.TestCase):
             tokenizer = tiny_tokenizer()
             data = tiny_data(validation=True)
             config = tiny_config()
-            pretrain_transformer(
+            pretrain_model(
                 tokenizer, data, settings, config, directory, "tiny", device="cpu"
             )
             run = Path(directory) / "tiny"

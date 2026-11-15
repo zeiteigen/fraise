@@ -51,15 +51,14 @@ and exits, so a stopped run remains unfinished and can be resumed from the Train
 The panels read runs from `DATA_DIR/models` and tokenizers from `DATA_DIR/tokenizers`. Generation
 uses CUDA when available and keeps the last checkpoint loaded until another is needed, the
 extension's worker idles out, or **Release device memory** is used; nothing coordinates it with
-running training jobs, so release it before training on the same GPU. Existing legacy runs can
-be used for inference; older optimizer or manifest formats require migration or a fresh run
-before resuming. See each extension's README for details.
+running training jobs, so release it before training on the same GPU. See each extension's
+README for details.
 
 ## Model architectures
 
-Model configuration JSON accepts `"architecture": "transformer"` or `"fraise"`.
-Omitting it selects the existing baseline, including when loading older runs. Architecture
-selection is shared by training, validation, inference, and parameter counting.
+Model configuration JSON names its architecture: `"architecture": "transformer"` or `"fraise"`
+(required). Architecture selection is shared by training, validation, inference, and parameter
+counting.
 
 The registry in `fraise.architectures` supplies configuration, construction,
 initialization, parameter-counting, and optimizer hooks. See
@@ -356,9 +355,7 @@ with it enabled, both passage order and source mixing change each epoch.
 Both controls are reproducible from `seed` and are shared by training and preview.
 
 When `shuffle_data=false`, sources are traversed in the fixed order
-FineWeb-Edu, Cosmopedia Khan Academy, and Cosmopedia stories. The legacy `shuffle`
-setting remains an alias for `shuffle_per_epoch`; old runs retain unmixed source
-order unless a fresh run enables `shuffle_data`.
+FineWeb-Edu, Cosmopedia Khan Academy, and Cosmopedia stories.
 
 Documents within each source form a continuous causal stream before packing;
 BOS/EOS mark their boundaries without blocking
@@ -626,30 +623,13 @@ inspector with IDs, text, levels, residual width, and children.
 
 ## Existing artifacts
 
-Existing tokenizer JSON files remain loadable without migration if they contain
-the required special tokens. The old tokenizer metadata index has an explicit
-migration that preserves tokenizer bytes and saves `metadata.v2.json`:
-
-```sh
-uv run create-tokenizer --migrate-metadata
-```
-
-Version-2 checkpoints and old final model weights load through a small key-name
-migration for the former embedding/output wrappers and SwiGLU spelling. To update
-an old run's metadata, explicitly rebuild its manifest from its archived settings
-and the current source cache:
-
-```sh
-uv run migrate-run data/models/OLD_RUN
-```
-
-This can download missing source prefixes. It records a new dataset identity,
-keeps the original manifest and `model_meta.v2.json`, and leaves checkpoint/model
-bytes untouched. Use the same source text as the original experiment; migration
-cannot prove that re-downloaded unpinned remote sources match a historical cache.
-Migration preserves the recorded AdamW optimizer identity and does not convert
-optimizer state to Muon.
-The old top-level Python import paths and redundant CLI aliases have been removed.
+Saved runs need a version-2 manifest that names their architecture, with schema 3 or 4
+checkpoints; resuming also needs a matching optimizer and per-epoch token budgets. Tokenizer
+JSON files load as is when they contain the required special tokens, and tokenizer
+directories keep a schema-3 `metadata.json` index. Older formats (version-1 manifests,
+schema-2 checkpoints and their former weight names, the `shuffle` and
+`gradient_accumulation_steps` settings, the old tokenizer index) are no longer read; their
+migrations have been removed.
 
 ## Storage and development
 

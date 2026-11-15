@@ -31,6 +31,7 @@ from fraise.hierarchy.runs import definition_from_weights
 from fraise.model.hierarchical import MacroEmbedding
 from fraise.preview.hierarchy import analyze_text, render_text_tree
 from fraise.training.optimizer import MuonWithAdamW
+from fraise.training.optimizer import OPTIMIZER_IDENTITY
 from fraise.training.run.manifest import check_resume_identity
 
 FRAISE = get_architecture("fraise")
@@ -240,6 +241,8 @@ class HierarchyConfigTests(unittest.TestCase):
         manifest = {
             "manifest_version": 2,
             "identity": {
+                "optimizer": OPTIMIZER_IDENTITY,
+                "token_budget_scope": "per_epoch",
                 "model_config": legacy,
                 "training": asdict(tiny_settings()),
                 "dataset": {},

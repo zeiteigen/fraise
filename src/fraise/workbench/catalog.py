@@ -102,7 +102,7 @@ class Catalog:
     def describe(self, directory):
         metadata = read_json(contained(directory / "model_meta.json", directory))
         manifest = metadata["manifest"]
-        identity = manifest.get("identity", manifest)
+        identity = manifest["identity"]
         parsed_config = model_config_from_dict(identity["model_config"])
         config = asdict(parsed_config)
         checkpoints = [
@@ -184,7 +184,7 @@ class Catalog:
         run = self.describe(directory)
         identifier = reference.checkpoint_id or run["default_checkpoint"]
         if resume and not run["can_resume"]:
-            raise ValueError("this run requires migration or a fresh training run")
+            raise ValueError("this run cannot be resumed; start a fresh training run")
         choices = [
             item
             for item in run["checkpoints"]

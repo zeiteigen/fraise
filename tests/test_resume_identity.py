@@ -59,32 +59,11 @@ class ResumeIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "resume model_config"):
             check_resume_identity(self.current, changed)
 
-    def test_legacy_shuffle_resumes_with_equivalent_unmixed_settings(self):
-        for shuffled in (False, True):
-            with self.subTest(shuffled=shuffled):
-                current = deepcopy(self.current)
-                current["identity"]["training"]["shuffle_per_epoch"] = shuffled
-                saved = deepcopy(current)
-                training = saved["identity"]["training"]
-                training["shuffle"] = training.pop("shuffle_per_epoch")
-                del training["shuffle_data"]
-                check_resume_identity(saved, current)
-                current["identity"]["training"]["shuffle_data"] = True
-                with self.assertRaisesRegex(ValueError, "resume training"):
-                    check_resume_identity(saved, current)
-
-    def test_old_single_epoch_budget_is_compatible(self):
+    def test_runs_without_a_token_budget_scope_cannot_resume(self):
         saved = deepcopy(self.current)
         del saved["identity"]["token_budget_scope"]
-        check_resume_identity(saved, self.current)
-
-    def test_old_multi_epoch_budget_cannot_restore_a_shorter_schedule(self):
-        current = deepcopy(self.current)
-        current["identity"]["training"]["num_epochs"] = 3
-        saved = deepcopy(current)
-        del saved["identity"]["token_budget_scope"]
-        with self.assertRaisesRegex(ValueError, "start a fresh run"):
-            check_resume_identity(saved, current)
+        with self.assertRaisesRegex(ValueError, "token budget scope.*fresh run"):
+            check_resume_identity(saved, self.current)
 
     def test_old_muon_runs_default_to_compiled_nondeterministic_execution(self):
         saved = deepcopy(self.current)

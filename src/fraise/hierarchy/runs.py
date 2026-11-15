@@ -23,7 +23,7 @@ def run_hierarchy(directory: str | Path, checkpoint: str | Path | None = None):
     """
     directory = Path(directory).expanduser()
     metadata = read_json(directory / META_FILE_NAME)
-    identity = metadata["manifest"].get("identity", metadata["manifest"])
+    identity = metadata["manifest"]["identity"]
     config = model_config_from_dict(identity["model_config"])
     tokenizer = load_tokenizer(directory / metadata["tokenizer_file"])
     if config.architecture != "fraise" or config.macro_embedding == "independent":

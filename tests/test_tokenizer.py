@@ -10,7 +10,6 @@ from tokenizers.models import WordLevel
 
 from fraise.io import write_json
 from fraise.tokenizer import artifacts, loading
-from fraise.tokenizer.migration import migrate_metadata
 from fraise.tokenizer.training import iter_text_batches, train_tokenizer
 
 
@@ -63,20 +62,3 @@ class TokenizerTests(unittest.TestCase):
             self.assertNotEqual(first, second)
             self.assertEqual(first.read_bytes(), before)
             self.assertEqual(len(artifacts.read_metadata(directory)), 2)
-
-    def test_legacy_metadata_has_an_explicit_migration(self):
-        with TemporaryDirectory() as directory:
-            directory = Path(directory)
-            tiny_tokenizer().save(str(directory / "old.json"))
-            write_json(
-                directory / "metadata.json",
-                {"tokenizers": [{"schema_version": 2, "path": "old.json"}]},
-            )
-            with self.assertRaisesRegex(ValueError, "migrate-metadata"):
-                artifacts.read_metadata(directory)
-            self.assertEqual(migrate_metadata(directory), 1)
-            self.assertEqual(artifacts.read_metadata(directory)[0]["schema_version"], 3)
-            backup = directory / "metadata.v2.json"
-            before = backup.read_bytes()
-            migrate_metadata(directory)
-            self.assertEqual(backup.read_bytes(), before)
