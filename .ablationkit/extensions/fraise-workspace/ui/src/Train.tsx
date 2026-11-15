@@ -66,7 +66,6 @@ interface Plan {
 const COMMON_TRAINING = [
   "batch_size",
   "minibatch_size",
-  "num_epochs",
   "sequence_length",
   "max_train_tokens",
   "learning_rate",
@@ -88,9 +87,8 @@ const LABELS: Record<string, string> = {
   vocab_size: "Vocabulary size",
   batch_size: "Batch size",
   minibatch_size: "Minibatch size",
-  num_epochs: "Epochs",
   sequence_length: "Sequence length",
-  max_train_tokens: "Training tokens / epoch",
+  max_train_tokens: "Training tokens",
   learning_rate: "Muon learning rate",
   adamw_learning_rate: "AdamW learning rate",
   use_bf16: "Use bfloat16",

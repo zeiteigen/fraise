@@ -136,7 +136,7 @@ class Catalog:
         if tokenizer["fingerprint"] != identity["tokenizer"]["fingerprint"]:
             raise ValueError("tokenizer does not match the saved run")
         can_resume = (
-            manifest.get("manifest_version") == 2
+            manifest.get("manifest_version") == 3
             and identity.get("optimizer") == OPTIMIZER_IDENTITY
             and any(p["kind"] == "checkpoint" for p in checkpoints)
         )

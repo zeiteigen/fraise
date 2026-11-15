@@ -10,7 +10,7 @@ from macro_fixtures import tiny_macro_tokenizer
 
 from fraise.training.pipeline.batch_types import target_units
 from fraise.training.pipeline.batches import iter_dataset_packed_batches
-from fraise.training.pipeline.budgets import plan_epochs
+from fraise.training.pipeline.budgets import plan_training
 from fraise.training.pipeline.packing import iter_packed_blocks, plan_unit_windows
 from fraise.training.pipeline.tokenization import pretokenize_split
 
@@ -56,7 +56,7 @@ class UnitPackingTests(unittest.TestCase):
                     plan = plan_unit_windows(split, length, stride, budget, units)
                     self.assertEqual(plan.windows, len(expected))
                     self.assertEqual(plan.units, units_total)
-                    options = {"seed": 0, "shuffle": False, "max_tokens": budget}
+                    options = {"max_tokens": budget}
                     blocks = list(
                         iter_packed_blocks(
                             split, length, stride, 0, unit_lengths=units, **options
@@ -91,30 +91,29 @@ class UnitPackingTests(unittest.TestCase):
                             [b.targets.tolist() for b in blocks[resume:]],
                         )
 
-    def test_epoch_plans_use_exact_units_and_reject_short_sources(self):
+    def test_plans_use_exact_units_and_reject_short_sources(self):
         units = np.array([1, 1, 1, 3, 2], dtype=np.int64)
         split = Dataset.from_dict({"token_ids": [[1, 3, 4, 3, 2], [1, 4, 4, 3, 2]]})
         settings = tiny_settings(
             dataset_token_counts={"fixture": 7},
             max_train_tokens=7,
             sequence_length=3,
-            num_epochs=2,
             batch_size=2,
         )
-        budgets, windows = plan_epochs({"fixture": split}, settings, unit_lengths=units)
+        budgets, windows = plan_training({"fixture": split}, settings, unit_lengths=units)
         # Targets 3,4,3 cover 3+2+3=8 units: the macro that reaches 7 is kept.
-        self.assertEqual(budgets, [{"fixture": 8}] * 2)
-        self.assertEqual(windows, [{"fixture": 1}] * 2)
+        self.assertEqual(budgets, {"fixture": 8})
+        self.assertEqual(windows, {"fixture": 1})
         batches = list(
             iter_dataset_packed_batches(
                 {"fixture": split},
-                budgets[0],
+                budgets,
                 3,
                 3,
                 0,
                 batch_size=2,
                 unit_lengths=units,
-                window_counts=windows[0],
+                window_counts=windows,
             )
         )
         self.assertEqual(sum(target_units(b, units) for _, b in batches), 8)
@@ -122,7 +121,7 @@ class UnitPackingTests(unittest.TestCase):
             dataset_token_counts={"fixture": 99}, max_train_tokens=99
         )
         with self.assertRaisesRegex(ValueError, "can supply at most"):
-            plan_epochs({"fixture": split}, too_large, unit_lengths=units)
+            plan_training({"fixture": split}, too_large, unit_lengths=units)
 
     def test_pretokenization_keeps_the_macro_crossing_the_unit_budget(self):
         macro = tiny_macro_tokenizer()

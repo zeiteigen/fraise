@@ -205,8 +205,10 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(finished.returncode, 0, finished.stderr)
 
     def test_sigterm_saves_a_resumable_checkpoint_after_the_current_step(self):
+        counts = {name: 6000 if name == "fineweb-edu" else 0 for name in SOURCE_NAMES}
         settings = asdict(self.settings) | {
-            "num_epochs": 100000,
+            "dataset_token_counts": counts,
+            "max_train_tokens": 6000,
             "checkpoint_interval_steps": 1000000,
             "log_interval_steps": 1,
         }
@@ -215,7 +217,7 @@ class WorkbenchTests(unittest.TestCase):
         events = self.root / "events.jsonl"
         log = (self.root / "output.log").open("wb")
         self.addCleanup(log.close)
-        script = offline("train.main()", rows=50)
+        script = offline("train.main()", rows=3000)
         process = subprocess.Popen(
             [
                 sys.executable, "-u", "-c", script,
@@ -255,13 +257,13 @@ class WorkbenchTests(unittest.TestCase):
             sink = AblationKitMetrics()
         callback = fan_out(None, sink)
         callback({"type": "stage", "phase": "training"})
-        callback({"type": "progress", "global_step": 3, "loss": 2.5, "tokens_seen": 12, "epoch": 1})
+        callback({"type": "progress", "global_step": 3, "loss": 2.5, "tokens_seen": 12})
         callback({"type": "validation_score", "global_step": 3, "validation": {"loss": 2.0, "bits_per_byte": 1.5}})
         callback({"type": "checkpoint", "global_step": 3, "path": "checkpoint_step_00000003.pt"})
         self.assertEqual(
             logged,
             [
-                (3, {"loss": 2.5, "tokens_seen": 12, "epoch": 1}),
+                (3, {"loss": 2.5, "tokens_seen": 12}),
                 (3, {"validation/loss": 2.0, "validation/bits_per_byte": 1.5}),
             ],
         )

@@ -37,61 +37,30 @@ class TrainingShuffleTests(unittest.TestCase):
         )
 
     def test_global_mixing_preserves_each_sources_windows_and_exact_target_counts(self):
-        for per_epoch in (False, True):
-            with self.subTest(per_epoch=per_epoch):
-                ordered = window_rows(self.batches(shuffle_per_epoch=per_epoch))
-                mixed_batches = list(
-                    self.batches(shuffle_per_epoch=per_epoch, shuffle_data=True)
-                )
-                mixed = window_rows(mixed_batches)
-                self.assertEqual(Counter(mixed), Counter(ordered))
-                self.assertNotEqual(mixed, ordered)
-                self.assertTrue(
-                    any(len(set(batch.sources)) > 1 for _, batch in mixed_batches)
-                )
-                for name, budget in self.budgets.items():
-                    self.assertEqual(
-                        [row for row in mixed if row[0] == name],
-                        [row for row in ordered if row[0] == name],
-                    )
-                    self.assertEqual(
-                        sum(sum(row[3]) for row in mixed if row[0] == name), budget
-                    )
-
-    def test_per_epoch_shuffle_reorders_passages_before_packing(self):
-        split = {
-            "first": Dataset.from_dict(
-                {"token_ids": [[i, i + 1, i + 2] for i in range(0, 24, 3)]}
+        ordered = window_rows(self.batches())
+        mixed_batches = list(self.batches(shuffle_data=True))
+        mixed = window_rows(mixed_batches)
+        self.assertEqual(Counter(mixed), Counter(ordered))
+        self.assertNotEqual(mixed, ordered)
+        self.assertTrue(any(len(set(batch.sources)) > 1 for _, batch in mixed_batches))
+        for name, budget in self.budgets.items():
+            self.assertEqual(
+                [row for row in mixed if row[0] == name],
+                [row for row in ordered if row[0] == name],
             )
-        }
-        options = {"batch_size": 1, "seed": 2}
-        ordered = window_rows(
-            iter_dataset_packed_batches(split, {"first": 23}, 4, 4, 0, **options)
-        )
-        shuffled = window_rows(
-            iter_dataset_packed_batches(
-                split, {"first": 23}, 4, 4, 0, shuffle_per_epoch=True, **options
-            )
-        )
-        self.assertNotEqual(ordered, shuffled)
+            self.assertEqual(sum(sum(row[3]) for row in mixed if row[0] == name), budget)
 
     def test_mixed_order_and_resume_cursor_are_reproducible(self):
-        for per_epoch in (False, True):
-            with self.subTest(per_epoch=per_epoch):
-                options = {"shuffle_per_epoch": per_epoch, "shuffle_data": True}
-                original = list(self.batches(**options))
-                self.assertEqual(
-                    window_rows(original), window_rows(self.batches(**options))
-                )
-                for start in (1, 3, 4):
-                    resumed = list(self.batches(start_batch_index=start, **options))
-                    self.assertEqual(
-                        [index for index, _ in resumed],
-                        [index for index, _ in original[start:]],
-                    )
-                    self.assertEqual(
-                        window_rows(resumed), window_rows(original[start:])
-                    )
+        options = {"shuffle_data": True}
+        original = list(self.batches(**options))
+        self.assertEqual(window_rows(original), window_rows(self.batches(**options)))
+        for start in (1, 3, 4):
+            resumed = list(self.batches(start_batch_index=start, **options))
+            self.assertEqual(
+                [index for index, _ in resumed],
+                [index for index, _ in original[start:]],
+            )
+            self.assertEqual(window_rows(resumed), window_rows(original[start:]))
 
     def test_mixer_does_not_materialize_the_entire_corpus(self):
         consumed = Counter()

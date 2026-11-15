@@ -34,7 +34,6 @@ def run_manifest(data, tokenizer, model_config, settings, device) -> dict:
         "optimizer": OPTIMIZER_IDENTITY,
         "model_config": asdict(model_config),
         "training": asdict(settings),
-        "token_budget_scope": "per_epoch",
         "dataset": {
             "source_order": list(data.train),
             "train": {
@@ -52,7 +51,7 @@ def run_manifest(data, tokenizer, model_config, settings, device) -> dict:
     return json.loads(
         json.dumps(
             {
-                "manifest_version": 2,
+                "manifest_version": 3,
                 "identity": identity,
                 "provenance": {
                     "git": get_git_snapshot(),
@@ -78,14 +77,15 @@ def run_manifest(data, tokenizer, model_config, settings, device) -> dict:
 
 
 def check_resume_identity(saved: dict, current: dict):
-    if saved.get("manifest_version") != 2:
-        raise ValueError("run manifest is not version 2; start a fresh run")
+    if saved.get("manifest_version") != 3:
+        raise ValueError(
+            "run manifest is not version 3 (single-pass training); start a fresh run"
+        )
     before, after = saved["identity"], current["identity"]
-    for name, label in (("optimizer", "optimizer"), ("token_budget_scope", "token budget scope")):
-        if before.get(name) != after[name]:
-            raise ValueError(
-                f"resume {label} does not match the saved run; start a fresh run"
-            )
+    if before.get("optimizer") != after["optimizer"]:
+        raise ValueError(
+            "resume optimizer does not match the saved run; start a fresh run"
+        )
     for name in ("model_config", "training", "dataset", "tokenizer"):
         previous = before[name]
         current = after[name]

@@ -31,7 +31,6 @@ def settings(**changes):
             "sequence_length": 6,
             "batch_size": 4,
             "minibatch_size": 2,
-            "num_epochs": 2,
             "checkpoint_interval_steps": 2,
             "checkpoint_keep_last": 20,
             "deterministic": True,
@@ -78,10 +77,10 @@ class FraiseTrainingTests(unittest.TestCase):
             run = Path(directory) / "fraise"
             metadata = read_json(run / "model_meta.json")
             self.assertTrue(metadata["training_finished"])
-            # Each epoch ends with the macro reaching 120 base tokens.
-            self.assertGreaterEqual(metadata["tokens_seen"], 2 * BUDGET)
+            # Training ends with the macro reaching 120 base tokens.
+            self.assertGreaterEqual(metadata["tokens_seen"], BUDGET)
             self.assertLess(
-                metadata["tokens_seen"], 2 * (BUDGET + self.macro.max_macro_length)
+                metadata["tokens_seen"], BUDGET + self.macro.max_macro_length
             )
             completed = [
                 result
@@ -144,19 +143,19 @@ class FraiseTrainingTests(unittest.TestCase):
     def test_symmetric_baseline_trains_on_the_same_base_token_budget(self):
         config = tiny_config(vocab_size=self.macro.get_vocab_size(), max_seq_len=8)
         with TemporaryDirectory() as directory:
-            self.train(directory, "symmetric", settings(num_epochs=1), config=config)
+            self.train(directory, "symmetric", settings(), config=config)
             symmetric = read_json(Path(directory) / "symmetric" / "model_meta.json")
             self.train(
                 directory,
                 "fraise",
-                settings(num_epochs=1),
+                settings(),
             )
             fraise = read_json(Path(directory) / "fraise" / "model_meta.json")
             self.assertEqual(symmetric["tokens_seen"], fraise["tokens_seen"])
             self.train(
                 directory,
                 "base",
-                settings(num_epochs=1),
+                settings(),
                 config=tiny_config(
                     vocab_size=self.base.get_vocab_size(), max_seq_len=8
                 ),

@@ -20,7 +20,6 @@ def iter_dataset_packed_batches(
     batch_size,
     start_batch_index=0,
     seed=0,
-    shuffle_per_epoch=False,
     shuffle_data=False,
     unit_lengths=None,
     window_counts=None,
@@ -38,8 +37,6 @@ def iter_dataset_packed_batches(
                 packing_stride,
                 token_budgets[name],
                 unit_lengths,
-                seed=seed,
-                shuffle=shuffle_per_epoch,
             ).windows
             for name in splits
             if token_budgets[name] > 0
@@ -58,8 +55,6 @@ def iter_dataset_packed_batches(
             sequence_length,
             packing_stride,
             pad_token_id,
-            seed=seed,
-            shuffle=shuffle_per_epoch,
             max_tokens=token_budgets[name],
             start_window=skipped[name],
             unit_lengths=unit_lengths,

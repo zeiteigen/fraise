@@ -2,7 +2,7 @@
 
 Documents are read straight from Arrow buffers as NumPy arrays; windows are
 strided views of that stream. Window ``w`` always starts at stream offset
-``w * stride``, so a resumed epoch can start at any window without packing
+``w * stride``, so a resumed run can start at any window without packing
 the windows before it.
 
 Macro-token streams measure budgets in base-token *units*: a window's units are
@@ -54,7 +54,7 @@ def packed_target_capacity(
     sequence_length: int,
     packing_stride: int,
 ) -> int:
-    """Count target positions one epoch can produce from a tokenized split.
+    """Count target positions a tokenized split can produce.
 
     Arrow list offsets give the concatenated stream length without loading
     every token ID. This matches ``iter_packed_blocks`` including repeated
@@ -73,15 +73,12 @@ def packed_target_capacity(
 
 
 class _TokenStream:
-    """Random access to the concatenated token stream of a split in a given order."""
+    """Random access to the concatenated token stream of a split, in document order."""
 
-    def __init__(self, column: pa.ChunkedArray, order: np.ndarray | None):
+    def __init__(self, column: pa.ChunkedArray):
         lengths = pc.fill_null(pc.list_value_length(column), 0)
         lengths = lengths.to_numpy().astype(np.int64)
         self._column = column
-        self._order = order
-        if order is not None:
-            lengths = lengths[order]
         # Document d occupies stream positions [starts[d], starts[d + 1]).
         self._starts = np.concatenate(([0], np.cumsum(lengths)))
         self.length = int(self._starts[-1])
@@ -90,10 +87,7 @@ class _TokenStream:
         """Stream tokens in ``[start, stop)``."""
         first = int(np.searchsorted(self._starts, start, side="right")) - 1
         last = int(np.searchsorted(self._starts, stop, side="left"))
-        if self._order is None:
-            documents = self._column.slice(first, last - first)
-        else:
-            documents = self._column.take(pa.array(self._order[first:last]))
+        documents = self._column.slice(first, last - first)
         values = pc.list_flatten(documents).to_numpy()
         offset = start - int(self._starts[first])
         return values[offset : offset + stop - start]
@@ -107,10 +101,8 @@ class WindowPlan:
     units: int
 
 
-def _stream(split: Dataset, seed: int, shuffle: bool) -> _TokenStream:
-    column = _token_column(split)
-    order = np.random.default_rng(seed).permutation(len(column)) if shuffle else None
-    return _TokenStream(column, order)
+def _stream(split: Dataset) -> _TokenStream:
+    return _TokenStream(_token_column(split))
 
 
 def _window_rows(stream, sequence_length, packing_stride, start_window=0):
@@ -152,13 +144,10 @@ def plan_unit_windows(
     packing_stride: int,
     budget: int | None,
     unit_lengths: np.ndarray,
-    *,
-    seed: int = 0,
-    shuffle: bool = False,
 ) -> WindowPlan:
     """Scan a macro stream; with too little data ``units`` is the capacity."""
     _check_geometry(sequence_length, packing_stride)
-    stream = _stream(split, seed, shuffle)
+    stream = _stream(split)
     budget = float("inf") if budget is None else budget
     produced = windows = 0
     for first, rows in _window_rows(stream, sequence_length, packing_stride):
@@ -244,8 +233,6 @@ def iter_packed_blocks(
     packing_stride: int,
     pad_token_id: int,
     *,
-    seed: int,
-    shuffle: bool,
     max_tokens: int | None,
     start_window: int = 0,
     unit_lengths: np.ndarray | None = None,
@@ -254,12 +241,10 @@ def iter_packed_blocks(
 
     Documents are concatenated into one causal stream. BOS/EOS tokens mark
     document boundaries, but they do not prevent attention across adjacent
-    documents because Fraise's model uses ordinary causal attention. With
-    ``shuffle`` the document order matches ``split.shuffle(seed=seed)``.
-    With ``unit_lengths`` the budget counts base-token units of macro targets.
+    documents because Fraise's model uses ordinary causal attention. With ``unit_lengths`` the budget counts base-token units of macro targets.
     """
     _check_geometry(sequence_length, packing_stride)
-    stream = _stream(split, seed, shuffle)
+    stream = _stream(split)
     if unit_lengths is not None:
         yield from _iter_unit_blocks(
             stream,

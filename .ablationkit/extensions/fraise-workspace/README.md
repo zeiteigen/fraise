@@ -17,7 +17,7 @@ entrypoint `launch` (Runs → More → Entrypoints → `launch` → Run…, with
 panel shows), so it is an ordinary AblationKit job:
 
 - **Progress:** the job page has the console; the run page has `loss`, `gradient_norm`,
-  `tokens_per_second`, `tokens_seen`, `total_tokens`, `epoch` and `validation/loss`,
+  `tokens_per_second`, `tokens_seen`, `total_tokens` and `validation/loss`,
   `validation/bits_per_byte`, by global step (`train --ablationkit-metrics`, the same names an
   agent job's metrics-file collection gives).
 - **Stop:** Cancel the job. AblationKit sends SIGTERM; fraise saves a resumable checkpoint after

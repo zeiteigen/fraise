@@ -100,7 +100,7 @@ class HierarchyTrainingTests(unittest.TestCase):
             )
 
     def test_stopped_hierarchical_run_resumes_exactly(self):
-        training = settings(num_epochs=1)
+        training = settings()
         config = self.config(hierarchy={"composition": "shared"})
         with TemporaryDirectory() as directory:
             self.train(directory, "reference", training, config=config)

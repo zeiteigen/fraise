@@ -10,7 +10,8 @@ from fraise.io import atomic_write
 
 from .rng import capture_rng_state, restore_rng_state
 
-SCHEMA_VERSION = 4
+# Schema 5 records single-pass training counters; 3 and 4 still load for their weights.
+SCHEMA_VERSION = 5
 # Schema 3 checkpoints pickled NumPy's RNG state; allow only those types.
 _SCHEMA_3_NUMPY_GLOBALS = [
     np._core.multiarray._reconstruct,
@@ -43,6 +44,7 @@ def save_model_state_dict(state_dict, path: str | Path) -> Path:
 def _validate_checkpoint(checkpoint, path) -> dict:
     if not isinstance(checkpoint, dict) or checkpoint.get("schema_version") not in (
         3,
+        4,
         SCHEMA_VERSION,
     ):
         raise ValueError(f"unsupported training checkpoint: {path}")

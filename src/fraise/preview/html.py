@@ -29,7 +29,7 @@ def render_html(examples, settings: TrainingSettings) -> str:
             )
         cards.append(
             f"<article><h2>#{example['number']} · {source}</h2>"
-            f"<p>Epoch {example['epoch']} · Batch {example['batch']} · "
+            f"<p>Batch {example['batch']} · "
             f"Position {example['batch_position']} · "
             f"{example['valid_targets']} valid targets</p>"
             + "".join(fields)
@@ -46,7 +46,7 @@ def render_html(examples, settings: TrainingSettings) -> str:
         "padding:.8rem;border-radius:4px}details{margin:.7rem 0}summary{cursor:pointer}</style>"
         f"<h1>Fraise training examples</h1><p>{len(examples)} packed windows · "
         f"sequence length {settings.sequence_length} · stride {settings.packing_stride} · "
-        f"batch size {settings.batch_size} · shuffle per epoch {settings.shuffle_per_epoch} · "
+        f"batch size {settings.batch_size} · "
         f"mix datasets {settings.shuffle_data} · seed {settings.seed}. "
         "Input text includes every model input position; target text shows only loss "
         "positions. Expand the ID and mask "

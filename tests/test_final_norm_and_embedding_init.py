@@ -28,7 +28,6 @@ def _settings(**overrides):
         learning_rate=0.01,
         dataset_token_counts={"a": 8},
         max_train_tokens=8,
-        num_epochs=1,
     )
     values.update(overrides)
     return TrainingSettings(**values)

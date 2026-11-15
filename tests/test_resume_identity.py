@@ -12,12 +12,11 @@ from fraise.training.run.manifest import check_resume_identity
 class ResumeIdentityTests(unittest.TestCase):
     def setUp(self):
         self.current = {
-            "manifest_version": 2,
+            "manifest_version": 3,
             "identity": {
                 "optimizer": OPTIMIZER_IDENTITY,
                 "model_config": asdict(tiny_config(tie_word_embeddings=True)),
                 "training": asdict(tiny_settings()),
-                "token_budget_scope": "per_epoch",
                 "dataset": {},
                 "tokenizer": {},
             },
@@ -59,10 +58,11 @@ class ResumeIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "resume model_config"):
             check_resume_identity(self.current, changed)
 
-    def test_runs_without_a_token_budget_scope_cannot_resume(self):
+    def test_runs_from_before_single_pass_training_cannot_resume(self):
         saved = deepcopy(self.current)
-        del saved["identity"]["token_budget_scope"]
-        with self.assertRaisesRegex(ValueError, "token budget scope.*fresh run"):
+        saved["manifest_version"] = 2
+        saved["identity"]["training"]["num_epochs"] = 1
+        with self.assertRaisesRegex(ValueError, "single-pass training.*fresh run"):
             check_resume_identity(saved, self.current)
 
     def test_old_muon_runs_default_to_compiled_nondeterministic_execution(self):

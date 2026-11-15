@@ -26,7 +26,6 @@ def training_defaults():
                 "batch_size": 8,
                 "minibatch_size": 2,
                 "learning_rate": 0.02,
-                "num_epochs": 1,
                 "max_train_tokens": 32768,
                 "dataset_token_counts": {
                     name: 32768 if name == "fineweb-edu" else 0 for name in SOURCE_NAMES

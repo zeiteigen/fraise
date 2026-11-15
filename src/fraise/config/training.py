@@ -12,7 +12,6 @@ class TrainingSettings:
     learning_rate: float
     dataset_token_counts: dict[str, int]
     max_train_tokens: int
-    num_epochs: int
     minibatch_size: int | None = None
     adamw_learning_rate: float = 0.0003
     muon_momentum: float = 0.95
@@ -36,7 +35,6 @@ class TrainingSettings:
     compile_threads: int = 4
     deterministic: bool = False
     log_interval_steps: int = 100
-    shuffle_per_epoch: bool = True
     shuffle_data: bool = False
     gradient_clip_norm: float = 1.0
     tied_weight_init_std: float = 0.02
@@ -52,7 +50,6 @@ class TrainingSettings:
             "batch_size",
             "minibatch_size",
             "max_train_tokens",
-            "num_epochs",
             "checkpoint_interval_steps",
             "checkpoint_keep_last",
             "tokenization_batch_size",
@@ -96,7 +93,6 @@ class TrainingSettings:
             "use_bf16",
             "use_compile",
             "deterministic",
-            "shuffle_per_epoch",
             "shuffle_data",
             "muon_nesterov",
         ):

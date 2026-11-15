@@ -1,4 +1,4 @@
-"""Prepare the exact tokenized sources and epoch plan shared by training and preview."""
+"""Prepare the exact tokenized sources and training plan shared by training and preview."""
 
 from dataclasses import dataclass
 
@@ -8,7 +8,7 @@ from datasets import Dataset
 from fraise.data.types import TrainingData
 from fraise.tokenizer.macro import unit_lengths as tokenizer_unit_lengths
 
-from .budgets import plan_epochs, steps_for_windows
+from .budgets import plan_training, steps_for_windows
 from .tokenization import pretokenize_split
 
 
@@ -16,15 +16,15 @@ from .tokenization import pretokenize_split
 class PreparedData:
     train: dict[str, Dataset]
     validation: Dataset | None
-    budgets: list[dict[str, int]]
+    budgets: dict[str, int]
     steps: int
-    windows: list[dict[str, int]] | None = None
+    windows: dict[str, int] | None = None
     # Base tokens per ID for macro streams; None when each ID is one target unit.
     unit_lengths: np.ndarray | None = None
 
     @property
     def total_targets(self) -> int:
-        return sum(sum(epoch.values()) for epoch in self.budgets)
+        return sum(self.budgets.values())
 
 
 def prepare_data(data: TrainingData, tokenizer, settings) -> PreparedData:
@@ -45,7 +45,7 @@ def prepare_data(data: TrainingData, tokenizer, settings) -> PreparedData:
         for name, source in data.train.items()
     }
     lengths = tokenizer_unit_lengths(tokenizer)
-    budgets, windows = plan_epochs(train, settings, unit_lengths=lengths)
+    budgets, windows = plan_training(train, settings, unit_lengths=lengths)
     steps = steps_for_windows(windows, batch_size=settings.batch_size)
     if settings.warmup_steps > steps:
         raise ValueError("warmup_steps cannot exceed planned training steps")

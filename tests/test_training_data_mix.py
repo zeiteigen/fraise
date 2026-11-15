@@ -41,8 +41,6 @@ class TrainingDataMixTests(unittest.TestCase):
                             context,
                             stride,
                             0,
-                            seed=0,
-                            shuffle=False,
                             max_tokens=None,
                         )
                         self.assertEqual(
@@ -50,11 +48,10 @@ class TrainingDataMixTests(unittest.TestCase):
                             sum(int(block.target_mask.sum()) for block in blocks),
                         )
 
-    def test_source_counts_repeat_in_full_each_epoch(self):
+    def test_source_counts_are_trained_once_in_full(self):
         settings = tiny_settings(
             dataset_token_counts={"first": 5, "second": 1},
             max_train_tokens=6,
-            num_epochs=3,
             sequence_length=4,
         )
         splits = {
@@ -62,49 +59,36 @@ class TrainingDataMixTests(unittest.TestCase):
             "second": Dataset.from_dict({"token_ids": [[1, 2, 3]]}),
         }
         budgets = plan_training_budgets(splits, settings)
-        self.assertEqual(
-            budgets,
-            [
-                {"first": 5, "second": 1},
-                {"first": 5, "second": 1},
-                {"first": 5, "second": 1},
-            ],
-        )
+        self.assertEqual(budgets, {"first": 5, "second": 1})
         emitted = sum(
             int(batch.target_mask.sum())
-            for budget in budgets
             for _, batch in iter_dataset_packed_batches(
-                splits, budget, 4, 4, 0, batch_size=2
+                splits, budgets, 4, 4, 0, batch_size=2
             )
         )
-        self.assertEqual(emitted, 18)
+        self.assertEqual(emitted, 6)
 
-    def test_more_epochs_do_not_relax_per_epoch_source_capacity(self):
+    def test_sources_must_supply_their_count_without_repeating(self):
         splits = {
             "first": Dataset.from_dict({"token_ids": [[1, 2, 3]]}),
             "second": Dataset.from_dict({"token_ids": [[1, 2, 3]]}),
         }
-        for num_epochs in (1, 3, 10):
-            with (
-                self.subTest(num_epochs=num_epochs),
-                self.assertRaisesRegex(ValueError, "'first' is assigned 5"),
-            ):
-                plan_training_budgets(
-                    splits,
-                    tiny_settings(
-                        dataset_token_counts={"first": 5, "second": 1},
-                        max_train_tokens=6,
-                        num_epochs=num_epochs,
-                        sequence_length=4,
-                    ),
-                )
+        with self.assertRaisesRegex(ValueError, "'first' is assigned 5"):
+            plan_training_budgets(
+                splits,
+                tiny_settings(
+                    dataset_token_counts={"first": 5, "second": 1},
+                    max_train_tokens=6,
+                    sequence_length=4,
+                ),
+            )
 
     def test_resume_cursor_preserves_batches_and_source_order(self):
         splits = {
             "first": Dataset.from_dict({"token_ids": [[1, 2, 3, 4, 5, 6]]}),
             "second": Dataset.from_dict({"token_ids": [[2, 3, 4, 5]]}),
         }
-        kwargs = {"batch_size": 2, "seed": 3, "shuffle_per_epoch": True}
+        kwargs = {"batch_size": 2, "seed": 3, "shuffle_data": True}
         all_batches = list(
             iter_dataset_packed_batches(
                 splits, {"first": 5, "second": 3}, 2, 2, 0, **kwargs
@@ -128,14 +112,13 @@ class TrainingDataMixTests(unittest.TestCase):
             self.assertEqual(actual.sources, expected.sources)
             self.assertTrue(actual.input_ids.equal(expected.input_ids))
 
-    def test_scheduler_counts_partial_source_and_epoch_batches(self):
+    def test_scheduler_counts_partial_source_batches(self):
         self.assertEqual(
-            planned_training_steps([{"first": 1}] * 4, sequence_length=4, batch_size=8),
-            4,
+            planned_training_steps({"first": 1}, sequence_length=4, batch_size=8), 1
         )
         self.assertEqual(
             planned_training_steps(
-                [{"first": 5, "second": 3}], sequence_length=4, batch_size=2
+                {"first": 5, "second": 3}, sequence_length=4, batch_size=2
             ),
             2,
         )
@@ -145,7 +128,7 @@ class TrainingDataMixTests(unittest.TestCase):
         budgets = plan_training_budgets(
             {"fixture": Dataset.from_dict({"token_ids": [[1, 2, 3, 4, 5]]})}, settings
         )
-        self.assertEqual(budgets, [{"fixture": 4, "unused": 0}])
+        self.assertEqual(budgets, {"fixture": 4, "unused": 0})
 
     def test_unbudgeted_tokenization_keeps_empty_rows(self):
         split = pretokenize_split(

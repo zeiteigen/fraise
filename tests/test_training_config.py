@@ -7,27 +7,16 @@ from fraise.config.training import TrainingSettings
 
 
 class TrainingConfigTests(unittest.TestCase):
-    def test_shuffle_flags_are_independent(self):
+    def test_data_mixing_defaults_off_and_epoch_settings_are_refused(self):
         values = asdict(tiny_settings())
-        del values["shuffle_per_epoch"]
         del values["shuffle_data"]
-        settings = TrainingSettings.from_dict(values)
-        self.assertTrue(settings.shuffle_per_epoch)
-        self.assertFalse(settings.shuffle_data)
-        for per_epoch in (False, True):
-            for mixed in (False, True):
-                with self.subTest(per_epoch=per_epoch, mixed=mixed):
-                    settings = TrainingSettings.from_dict(
-                        values
-                        | {
-                            "shuffle_per_epoch": per_epoch,
-                            "shuffle_data": mixed,
-                        }
-                    )
-                    self.assertIs(settings.shuffle_per_epoch, per_epoch)
-                    self.assertIs(settings.shuffle_data, mixed)
-        with self.assertRaises(TypeError):
-            TrainingSettings.from_dict(values | {"shuffle": False})
+        self.assertFalse(TrainingSettings.from_dict(values).shuffle_data)
+        for mixed in (False, True):
+            settings = TrainingSettings.from_dict(values | {"shuffle_data": mixed})
+            self.assertIs(settings.shuffle_data, mixed)
+        for removed in ({"shuffle": False}, {"num_epochs": 1}, {"shuffle_per_epoch": False}):
+            with self.subTest(removed=removed), self.assertRaises(TypeError):
+                TrainingSettings.from_dict(values | removed)
 
     def test_accumulation_is_derived_from_minibatch_size(self):
         settings = tiny_settings(batch_size=8, minibatch_size=2)
@@ -76,7 +65,6 @@ class TrainingConfigTests(unittest.TestCase):
             {"compile_threads": 1.5},
             {"log_interval_steps": 0},
             {"log_interval_steps": True},
-            {"shuffle_per_epoch": "true"},
             {"shuffle_data": 1},
             {"betas": [0.9, 1]},
             {"seed": True},
@@ -145,7 +133,6 @@ class TrainingConfigTests(unittest.TestCase):
                     {
                         "batch_size": 1,
                         "learning_rate": 0.001,
-                        "num_epochs": 1,
                         "max_train_tokens": 4,
                         "dataset_token_counts": {"fixture": 4},
                         "max_validation_tokens": 123,

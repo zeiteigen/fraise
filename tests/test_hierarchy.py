@@ -239,10 +239,9 @@ class HierarchyConfigTests(unittest.TestCase):
         self.assertIsNone(parsed.embedding_hierarchy)
         # Manifests written before this field existed still resume.
         manifest = {
-            "manifest_version": 2,
+            "manifest_version": 3,
             "identity": {
                 "optimizer": OPTIMIZER_IDENTITY,
-                "token_budget_scope": "per_epoch",
                 "model_config": legacy,
                 "training": asdict(tiny_settings()),
                 "dataset": {},

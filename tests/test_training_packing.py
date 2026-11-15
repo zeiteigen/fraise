@@ -56,7 +56,7 @@ def rows(blocks):
 
 
 class PackingEquivalenceTests(unittest.TestCase):
-    def test_matches_reference_for_geometries_budgets_shuffles_and_resumes(self):
+    def test_matches_reference_for_geometries_budgets_and_resumes(self):
         generator = random.Random(11)
         for trial in range(40):
             documents = [
@@ -68,12 +68,10 @@ class PackingEquivalenceTests(unittest.TestCase):
             context = generator.randrange(2, 7)
             stride = generator.randrange(1, context + 1)
             budget = generator.choice([None, generator.randrange(1, total + 2)])
-            shuffle = generator.random() < 0.5
-            ordered = split.shuffle(seed=trial) if shuffle else split
             expected = list(
-                reference_blocks(ordered["token_ids"], context, stride, 0, budget)
+                reference_blocks(split["token_ids"], context, stride, 0, budget)
             )
-            options = dict(seed=trial, shuffle=shuffle, max_tokens=budget)
+            options = dict(max_tokens=budget)
             with self.subTest(trial=trial, context=context, stride=stride):
                 actual = rows(iter_packed_blocks(split, context, stride, 0, **options))
                 self.assertEqual(actual, expected)
@@ -91,7 +89,7 @@ class PackingEquivalenceTests(unittest.TestCase):
             features=Features({"token_ids": List(Value("int32"))}),
         ).select([2, 0])
         blocks = list(
-            iter_packed_blocks(split, 3, 3, 0, seed=0, shuffle=False, max_tokens=None)
+            iter_packed_blocks(split, 3, 3, 0, max_tokens=None)
         )
         self.assertEqual(blocks[0].input_ids.dtype, torch.long)
         self.assertEqual(
@@ -108,54 +106,47 @@ class PackingEquivalenceTests(unittest.TestCase):
         }
         budgets = {"first": 41, "second": 17}
         for stride in (2, 4):
-            for shuffle_per_epoch in (False, True):
-                for shuffle_data in (False, True):
-                    options = dict(
-                        batch_size=3,
-                        seed=5,
-                        shuffle_per_epoch=shuffle_per_epoch,
-                        shuffle_data=shuffle_data,
+            for shuffle_data in (False, True):
+                options = dict(batch_size=3, seed=5, shuffle_data=shuffle_data)
+                full = list(
+                    iter_dataset_packed_batches(
+                        splits, budgets, 4, stride, 0, **options
                     )
-                    full = list(
-                        iter_dataset_packed_batches(
-                            splits, budgets, 4, stride, 0, **options
+                )
+                for start in range(len(full) + 1):
+                    with self.subTest(
+                        stride=stride,
+                        mixed=shuffle_data,
+                        start=start,
+                    ):
+                        resumed = list(
+                            iter_dataset_packed_batches(
+                                splits,
+                                budgets,
+                                4,
+                                stride,
+                                0,
+                                start_batch_index=start,
+                                **options,
+                            )
                         )
-                    )
-                    for start in range(len(full) + 1):
-                        with self.subTest(
-                            stride=stride,
-                            per_epoch=shuffle_per_epoch,
-                            mixed=shuffle_data,
-                            start=start,
+                        self.assertEqual(
+                            [index for index, _ in resumed],
+                            list(range(start, len(full))),
+                        )
+                        for (_, actual), (_, expected) in zip(
+                            resumed, full[start:]
                         ):
-                            resumed = list(
-                                iter_dataset_packed_batches(
-                                    splits,
-                                    budgets,
-                                    4,
-                                    stride,
-                                    0,
-                                    start_batch_index=start,
-                                    **options,
-                                )
+                            self.assertEqual(actual.sources, expected.sources)
+                            torch.testing.assert_close(
+                                actual.input_ids, expected.input_ids
                             )
-                            self.assertEqual(
-                                [index for index, _ in resumed],
-                                list(range(start, len(full))),
+                            torch.testing.assert_close(
+                                actual.targets, expected.targets
                             )
-                            for (_, actual), (_, expected) in zip(
-                                resumed, full[start:]
-                            ):
-                                self.assertEqual(actual.sources, expected.sources)
-                                torch.testing.assert_close(
-                                    actual.input_ids, expected.input_ids
-                                )
-                                torch.testing.assert_close(
-                                    actual.targets, expected.targets
-                                )
-                                torch.testing.assert_close(
-                                    actual.target_mask, expected.target_mask
-                                )
+                            torch.testing.assert_close(
+                                actual.target_mask, expected.target_mask
+                            )
 
 
 if __name__ == "__main__":

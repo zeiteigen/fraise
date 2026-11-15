@@ -26,7 +26,7 @@ from fraise.training.training import pretrain_model
 from fraise.training.run.checkpoints import load_checkpoint_file
 
 settings = tiny_settings(
-    batch_size=4, minibatch_size=2, num_epochs=3, max_train_tokens=5,
+    batch_size=2, minibatch_size=1, max_train_tokens=5,
     dataset_token_counts={'fixture': 5}, checkpoint_keep_last=3,
     use_compile=False, use_bf16=True, deterministic=True,
 )
@@ -34,9 +34,9 @@ with TemporaryDirectory() as directory:
     args = (tiny_tokenizer(), tiny_data(), settings, tiny_config(), directory, 'tiny')
     pretrain_model(*args, device='cuda')
     run = Path(directory) / 'tiny'
-    expected = load_checkpoint_file(run / 'checkpoint_step_00000003.pt')
+    expected = load_checkpoint_file(run / 'checkpoint_step_00000002.pt')
     pretrain_model(*args, resume_from=run / 'checkpoint_step_00000001.pt', device='cuda')
-    actual = load_checkpoint_file(run / 'checkpoint_step_00000003.pt')
+    actual = load_checkpoint_file(run / 'checkpoint_step_00000002.pt')
     for name, tensor in expected['model_state_dict'].items():
         assert torch.equal(tensor, actual['model_state_dict'][name]), name
     for index, state in expected['optimizer_state_dict']['state'].items():

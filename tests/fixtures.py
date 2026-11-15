@@ -55,10 +55,8 @@ def tiny_settings(**changes):
             "learning_rate": 1e-3,
             "dataset_token_counts": {"fixture": 4},
             "max_train_tokens": 4,
-            "num_epochs": 1,
             "sequence_length": 2,
             "checkpoint_interval_steps": 1,
-            "shuffle_per_epoch": False,
         }
         | changes
     )

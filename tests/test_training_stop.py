@@ -73,7 +73,8 @@ class TrainingStopTests(unittest.TestCase):
 
     def test_stop_and_resume_match_uninterrupted_at_every_training_boundary(self):
         settings = tiny_settings(
-            num_epochs=2,
+            dataset_token_counts={"fixture": 6},
+            max_train_tokens=6,
             deterministic=True,
             log_interval_steps=1,
             checkpoint_keep_last=4,
@@ -82,14 +83,14 @@ class TrainingStopTests(unittest.TestCase):
             expected = self.train(directory, "reference", settings)
             reference = Path(directory) / "reference"
             final_checkpoint = load_checkpoint_file(
-                reference / "checkpoint_step_00000004.pt"
+                reference / "checkpoint_step_00000003.pt"
             )
             cases = (
-                ("mid-epoch", "progress", 1, 0),
-                ("epoch-boundary", "checkpoint", 2, 1),
-                ("final-step", "checkpoint", 4, 2),
+                ("mid-run", "progress", 1),
+                ("checkpoint", "checkpoint", 2),
+                ("final-step", "checkpoint", 3),
             )
-            for name, event_type, step, epoch in cases:
+            for name, event_type, step in cases:
                 with self.subTest(boundary=name):
                     stop = Event()
                     events = []
@@ -131,7 +132,7 @@ class TrainingStopTests(unittest.TestCase):
                             checkpoint[key], expected_checkpoint[key]
                         )
                     self.assertEqual(checkpoint["training_state"]["global_step"], step)
-                    self.assertEqual(checkpoint["training_state"]["epoch"], epoch)
+                    self.assertEqual(checkpoint["training_state"]["tokens_seen"], 2 * step)
                     self.assertEqual(
                         checkpoint["scheduler_state_dict"]["last_epoch"], step
                     )
@@ -151,24 +152,27 @@ class TrainingStopTests(unittest.TestCase):
                         resumed.state_dict(), expected.state_dict()
                     )
                     resumed_checkpoint = load_checkpoint_file(
-                        run / "checkpoint_step_00000004.pt"
+                        run / "checkpoint_step_00000003.pt"
                     )
                     self.assert_payload_equal(resumed_checkpoint, final_checkpoint)
                     self.assertTrue(
                         read_json(run / "model_meta.json")["training_finished"]
                     )
 
-    def test_stop_at_last_update_resumes_unfinished_epoch_bookkeeping(self):
+    def test_stop_after_an_update_resumes_unfinished_bookkeeping(self):
         settings = tiny_settings(
-            num_epochs=2, deterministic=True, checkpoint_keep_last=4
+            dataset_token_counts={"fixture": 6},
+            max_train_tokens=6,
+            deterministic=True,
+            checkpoint_keep_last=4,
         )
         with TemporaryDirectory() as directory:
             self.train(directory, "reference", settings)
             reference = Path(directory) / "reference"
             expected_final = load_checkpoint_file(
-                reference / "checkpoint_step_00000004.pt"
+                reference / "checkpoint_step_00000003.pt"
             )
-            for target in (2, 4):
+            for target in (2, 3):
                 with self.subTest(completed_update=target):
                     stop = Event()
                     completed = []
@@ -210,17 +214,14 @@ class TrainingStopTests(unittest.TestCase):
                             checkpoint[key], reference_checkpoint[key]
                         )
                     self.assertEqual(
-                        checkpoint["training_state"]["epoch"], target // 2 - 1
+                        checkpoint["training_state"]["tokens_seen"], 2 * target
                     )
                     self.assertEqual(
-                        checkpoint["training_state"]["epoch_valid_tokens"], 4
-                    )
-                    self.assertEqual(
-                        checkpoint["training_state"]["next_batch_index"], 2
+                        checkpoint["training_state"]["next_batch_index"], target
                     )
                     self.assertEqual(len(completed), target)
                     self.train(directory, name, settings, resume_from=checkpoint_path)
-                    final = load_checkpoint_file(run / "checkpoint_step_00000004.pt")
+                    final = load_checkpoint_file(run / "checkpoint_step_00000003.pt")
                     self.assert_payload_equal(final, expected_final)
 
     def test_stop_while_finishing_validation_saves_without_waiting_for_evaluator(self):

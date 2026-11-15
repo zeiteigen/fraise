@@ -1,4 +1,4 @@
-"""Train a registered language model over the prepared epoch plan."""
+"""Train a registered language model in one pass over the prepared token plan."""
 
 from pathlib import Path
 
@@ -12,7 +12,6 @@ from .diagnostics import TrainingDiagnostics
 from .events import emit
 from .pipeline.batch_types import target_units
 from .pipeline.batches import iter_dataset_packed_batches
-from .pipeline.budgets import epoch_seed
 from .pipeline.prefetch import prefetch_batches
 from .pipeline.preparation import prepare_data
 from .run.artifacts import inspect_run_destination
@@ -80,8 +79,7 @@ def pretrain_model(
             f"with the macro that reaches its count ({total_train_tokens:,} exact)."
         )
     run.log(
-        f"Training {settings.max_train_tokens:,} targets per epoch for {settings.num_epochs} "
-        f"epochs ({total_train_tokens:,} total) from step {state.global_step}; "
+        f"Training {total_train_tokens:,} targets from step {state.global_step}; "
         f"context {settings.sequence_length}, batch {settings.batch_size}, minibatch {settings.minibatch_size}, "
         f"accumulation {settings.gradient_accumulation_steps}, device {runtime.device}."
     )
@@ -109,71 +107,58 @@ def pretrain_model(
             on_event=on_event,
             total_tokens=total_train_tokens,
         )
-        for epoch in range(state.epoch, settings.num_epochs):
+        runtime.model.train()
+        trained = False
+        batches = iter_dataset_packed_batches(
+            prepared.train,
+            prepared.budgets,
+            settings.sequence_length,
+            settings.packing_stride,
+            pad_id,
+            batch_size=settings.batch_size,
+            start_batch_index=state.next_batch_index,
+            seed=settings.seed,
+            shuffle_data=settings.shuffle_data,
+            unit_lengths=prepared.unit_lengths,
+            window_counts=prepared.windows,
+        )
+        for batch_index, batch in prefetch_batches(
+            batches, pin_memory=runtime.device.type == "cuda"
+        ):
             if stop_requested is not None and stop_requested():
                 run.stop(runtime, state, validation)
                 return runtime.model
-            epoch_targets = sum(prepared.budgets[epoch].values())
-            runtime.model.train()
-            batches = iter_dataset_packed_batches(
-                prepared.train,
-                prepared.budgets[epoch],
-                settings.sequence_length,
-                settings.packing_stride,
-                pad_id,
-                batch_size=settings.batch_size,
-                start_batch_index=state.next_batch_index,
-                seed=epoch_seed(settings, epoch),
-                shuffle_per_epoch=settings.shuffle_per_epoch,
-                shuffle_data=settings.shuffle_data,
-                unit_lengths=prepared.unit_lengths,
-                window_counts=prepared.windows[epoch],
+            loss, valid_tokens, grad_norm = runtime.step(batch)
+            state.record_step(
+                batch_index,
+                loss,
+                valid_tokens,
+                target_units(batch, prepared.unit_lengths),
             )
-            for batch_index, batch in prefetch_batches(
-                batches, pin_memory=runtime.device.type == "cuda"
-            ):
-                if stop_requested is not None and stop_requested():
-                    run.stop(runtime, state, validation)
-                    return runtime.model
-                loss, valid_tokens, grad_norm = runtime.step(batch)
-                state.record_step(
-                    batch_index,
-                    loss,
-                    valid_tokens,
-                    target_units(batch, prepared.unit_lengths),
-                )
-                if stop_requested is not None and stop_requested():
-                    diagnostics.record(state, loss, grad_norm, validation)
-                    diagnostics.report(state, validation)
-                    run.stop(runtime, state, validation)
-                    return runtime.model
-                if (
-                    state.global_step % settings.checkpoint_interval_steps == 0
-                    and state.epoch_valid_tokens < epoch_targets
-                ):
-                    run.checkpoint(runtime, state, validation)
-                validation.report()
+            trained = True
+            if stop_requested is not None and stop_requested():
                 diagnostics.record(state, loss, grad_norm, validation)
-                if state.epoch_valid_tokens >= epoch_targets:
-                    break
-            if state.optimizer_steps_in_epoch == 0:
-                raise RuntimeError(
-                    f"epoch {epoch + 1} produced no valid training batches"
-                )
-            if state.epoch_valid_tokens != epoch_targets:
-                raise RuntimeError(
-                    f"epoch {epoch + 1} ended at {state.epoch_valid_tokens} / "
-                    f"{epoch_targets} target tokens"
-                )
-            epoch_loss = state.epoch_loss
-            epoch_tokens = state.epoch_valid_tokens
-            state.finish_epoch()
+                diagnostics.report(state, validation)
+                run.stop(runtime, state, validation)
+                return runtime.model
+            if (
+                state.global_step % settings.checkpoint_interval_steps == 0
+                and state.tokens_seen < total_train_tokens
+            ):
+                run.checkpoint(runtime, state, validation)
+            validation.report()
+            diagnostics.record(state, loss, grad_norm, validation)
+            if state.tokens_seen >= total_train_tokens:
+                break
+        if state.global_step == 0:
+            raise RuntimeError("training produced no valid batches")
+        if trained:
             run.checkpoint(runtime, state, validation)
             diagnostics.report(state, validation)
             run.log(
-                f"Epoch {epoch + 1}/{settings.num_epochs}: loss {epoch_loss:.6f}, "
-                f"tokens {epoch_tokens}/{epoch_targets} this epoch, "
-                f"total {state.tokens_seen}/{total_train_tokens}, latest validation {validation.latest}"
+                f"Training pass: loss {state.mean_loss:.6f}, "
+                f"tokens {state.tokens_seen:,}/{total_train_tokens:,}, "
+                f"latest validation {validation.latest}"
             )
         if state.tokens_seen != total_train_tokens:
             raise RuntimeError(

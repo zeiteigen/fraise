@@ -61,12 +61,10 @@ class TrainingDiagnostics:
                 self.on_event,
                 "progress",
                 global_step=state.global_step,
-                epoch=state.epoch + (1 if state.epoch_valid_tokens else 0),
                 tokens_seen=state.tokens_seen,
                 total_tokens=self.total_tokens
                 if self.total_tokens is not None
-                else self.runtime.settings.max_train_tokens
-                * self.runtime.settings.num_epochs,
+                else self.runtime.settings.max_train_tokens,
                 loss=loss,
                 gradient_norm=norm,
                 tokens_per_second=rate,

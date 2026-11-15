@@ -138,9 +138,9 @@ PoC comparisons need every architecture to see the same text, so token budgets
 base tokens. With a macro tokenizer a target macro counts as its decomposition
 length. Downloads are selected with the base tokenizer, so a macro run and an 8k
 run with the same budgets reuse the same raw cache. Each source ends with the
-macro that reaches its count, so an epoch can exceed its count by less than one
+macro that reaches its count, so a source can exceed its count by less than one
 macro; planning computes these exact counts (logged at the start) and checks them
-at the end of each epoch. Progress, throughput, and `tokens_seen` report base
+at the end of training. Progress, throughput, and `tokens_seen` report base
 tokens, while training loss stays the mean over the model's own targets.
 
 ### Bits per byte
@@ -191,7 +191,6 @@ The checked-in `hyperparameters.example.json` provides the training configuratio
   "muon_ns_steps": 5,
   "betas": [0.9, 0.95],
   "weight_decay": 0.01,
-  "num_epochs": 1,
   "sequence_length": 512,
   "max_train_tokens": 250000000,
   "dataset_token_counts": {
@@ -203,7 +202,6 @@ The checked-in `hyperparameters.example.json` provides the training configuratio
   "validation_timeout_seconds": 300,
   "validation_cpu_threads": 4,
   "validation_device": "cpu",
-  "shuffle_per_epoch": false,
   "shuffle_data": false,
   "use_bf16": true,
   "use_compile": true,
@@ -214,22 +212,17 @@ The checked-in `hyperparameters.example.json` provides the training configuratio
 }
 ```
 
-The required training fields are `batch_size`, `learning_rate`, `num_epochs`,
+The required training fields are `batch_size`, `learning_rate`,
 `max_train_tokens`, and `dataset_token_counts`. Dataset counts are non-negative
 integers, include every registered source, and sum exactly to `max_train_tokens`.
-Both `max_train_tokens` and the source counts apply to each epoch. Every epoch
-reuses the selected tokenized corpus with the same source allocations; total
-training exposure is `max_train_tokens * num_epochs`. For example, 150,000
-targets and three epochs produce 450,000 training targets, with a loss report
-and validation checkpoint at the end of each epoch. The learning-rate schedule
-covers all epochs.
+Training makes a single pass: each source supplies its count of targets once, never
+repeating data, and the learning-rate schedule covers that pass. The pass ends with a
+loss report and a validation checkpoint.
 Sources assigned zero tokens are skipped. Counts measure causal targets produced
 by the selected tokenizer, rather than words or an estimated byte/token ratio.
 
-`minibatch_size` defaults to `batch_size`. For existing configs,
-`gradient_accumulation_steps` may be supplied instead; it is normalized to a
-minibatch size and then derived for reporting. Their product must equal
-`batch_size`. Gradients are weighted by valid targets, including padded tails.
+`minibatch_size` defaults to `batch_size` and must divide it; gradient accumulation
+steps are derived as `batch_size / minibatch_size`. Gradients are weighted by valid targets, including padded tails.
 
 Other defaults are defined in `fraise.config.training.TrainingSettings`:
 `adamw_learning_rate=0.0003`, `muon_momentum=0.95`, `muon_nesterov=true`,
@@ -237,7 +230,7 @@ Other defaults are defined in `fraise.config.training.TrainingSettings`:
 `packing_stride=sequence_length`, `seed=1337`, `checkpoint_interval_steps=1000`,
 `checkpoint_keep_last=2`, `tokenization_batch_size=1000`, `use_bf16=false`,
 `use_compile=true`, `compile_threads=4`, `deterministic=false`, `log_interval_steps=100`,
-`shuffle_per_epoch=true`, `shuffle_data=false`, `gradient_clip_norm=1`, `max_validation_tokens=32768`,
+`shuffle_data=false`, `gradient_clip_norm=1`, `max_validation_tokens=32768`,
 `validation_timeout_seconds=300`, `validation_cpu_threads=4`, and
 `validation_device="cpu"`. The checked-in config selects `"cpu"`. Set
 `max_validation_tokens` in `hyperparameters.json` to change the number of causal
@@ -316,7 +309,7 @@ as one fixed-shape graph; the module itself is not wrapped, so checkpoint keys a
 unchanged. Masked targets are ignored by the loss rather than gathered out, which
 avoids a device sync per minibatch. Compiled training pads short
 minibatches to `minibatch_size`, masking all added rows out of the loss and token
-counts. This keeps the model's input shape fixed through epoch tails. Set
+counts. This keeps the model's input shape fixed through source tails. Set
 `use_compile=false` for small smoke tests where compilation costs more than it
 saves; eager execution keeps short minibatches at their original size.
 `compile_threads` controls TorchInductor's compiler pool (default four workers)
@@ -342,17 +335,13 @@ attention policy and execution settings are recorded in the run manifest.
 Reports include both optimizers' next learning rates, loss, gradient norm,
 tokens/second, validation queue wait time, and allocated/reserved/peak CUDA memory.
 Throughput excludes the initial compiled warmup and includes queue waits and
-checkpoint overhead. Epoch ends also report progress. The queue logs each
+checkpoint overhead. The end of training also reports progress. The queue logs each
 backpressure wait and its running total.
 
-`shuffle_per_epoch` shuffles passages within each
-source with `seed + epoch`, preserving token order inside each passage.
-`shuffle_data` randomly interleaves packed windows across all active sources
+Passages within each source are read in their stored order. `shuffle_data` randomly interleaves packed windows across all active sources
 before batching, while preserving each source's exact token allocation. Mixing
 uses bounded memory and samples sources according to their remaining window
-counts. With `shuffle_per_epoch=false`, the mixed order repeats each epoch;
-with it enabled, both passage order and source mixing change each epoch.
-Both controls are reproducible from `seed` and are shared by training and preview.
+counts. Mixing is reproducible from `seed` and is shared by training and preview.
 
 When `shuffle_data=false`, sources are traversed in the fixed order
 FineWeb-Edu, Cosmopedia Khan Academy, and Cosmopedia stories.
@@ -362,9 +351,8 @@ BOS/EOS mark their boundaries without blocking
 attention between documents. A stride below the context length repeats targets
 across overlapping windows, and those repeats count toward the allocation.
 
-Each source must supply its allocated targets in a single epoch. A
-capacity check rejects larger allocations even when multiple epochs are
-requested. FineWeb
+Each source must supply its allocated targets without repeating data; a capacity
+check rejects larger allocations. FineWeb
 reserves the first 0.05 GB of source text for validation even when its training
 allocation is zero.
 
@@ -380,10 +368,10 @@ uv run visualize-training-data \
   --output data/training_examples.html
 ```
 
-Preview shares training's tokenization, epoch plan, seed, stride, padding, and
+Preview shares training's tokenization, token plan, seed, stride, padding, and
 batch iterator. Source labels travel with the packed windows. It skips held-out
 validation downloads. `--first-source-only` avoids later sources when the first
-source's first epoch supplies every requested window; otherwise omit the flag.
+source supplies every requested window; otherwise omit the flag.
 
 ## Runs, checkpoints, and inference
 
@@ -424,8 +412,6 @@ Resuming from a checkpoint older than the run's newest one starts a new
 continuation. The later checkpoints from the abandoned continuation are moved
 (never deleted) into `superseded-after-step-NNNNNNNN/` inside the run, so
 retention and directory resumes only see the live continuation.
-Resume also checks the token budget scope so saved learning-rate schedules
-match the configured per-epoch token allocations.
 
 Training retains the newest two checkpoints by default. Active and pending
 validation checkpoints remain protected until evaluation finishes. Every
@@ -623,12 +609,15 @@ inspector with IDs, text, levels, residual width, and children.
 
 ## Existing artifacts
 
-Saved runs need a version-2 manifest that names their architecture, with schema 3 or 4
-checkpoints; resuming also needs a matching optimizer and per-epoch token budgets. Tokenizer
+Saved runs need a manifest (version 2 or 3) that names their architecture, with schema 3,
+4, or 5 checkpoints; all of these load for inference. Resuming needs a version-3 manifest
+(single-pass training) with schema-5 checkpoints and a matching optimizer; runs from
+before single-pass training are finished and cannot be resumed. Tokenizer
 JSON files load as is when they contain the required special tokens, and tokenizer
 directories keep a schema-3 `metadata.json` index. Older formats (version-1 manifests,
-schema-2 checkpoints and their former weight names, the `shuffle` and
-`gradient_accumulation_steps` settings, the old tokenizer index) are no longer read; their
+schema-2 checkpoints and their former weight names, the `shuffle`,
+`shuffle_per_epoch`, `num_epochs`, and `gradient_accumulation_steps` settings, the old
+tokenizer index) are no longer read; their
 migrations have been removed.
 
 ## Storage and development
@@ -637,9 +626,9 @@ Raw streaming downloads have request-specific directories under
 `DATA_DIR/raw/SOURCE/raw/`. Validation uses its own request cache and survives
 changes to training allocations. Arrow caches use local hard links when possible;
 source changes invalidate them. Tokenized prefixes are memory-mapped int32 token
-caches on disk, reused across epochs and resumes; the first run after upgrading
+caches on disk, reused across runs and resumes; the first run after upgrading
 from int64 caches rebuilds them once. Packing reads Arrow buffers directly as NumPy
-arrays, and a resumed epoch jumps to its next window without re-packing earlier
+arrays, and a resumed run jumps to its next window without re-packing earlier
 batches. Removing a cache causes it to be rebuilt.
 
 The package separates model components, configuration, source acquisition,

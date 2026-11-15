@@ -4,7 +4,6 @@ from fraise.config.values import integer
 from fraise.tokenizer.loading import special_token_id
 from fraise.training.pipeline.batch_types import target_units
 from fraise.training.pipeline.batches import iter_dataset_packed_batches
-from fraise.training.pipeline.budgets import epoch_seed
 from fraise.training.pipeline.preparation import prepare_data
 
 
@@ -12,60 +11,57 @@ def collect_examples(data, tokenizer, settings, count, *, first_source_only=Fals
     integer("count", count)
     prepared = prepare_data(data, tokenizer, settings)
     if first_source_only:
-        first_name, first_budget = next(iter(prepared.budgets[0].items()))
+        first_name, first_budget = next(iter(prepared.budgets.items()))
         enough = (
-            prepared.windows[0].get(first_name, 0) >= count
+            prepared.windows.get(first_name, 0) >= count
             if prepared.unit_lengths is not None
             else first_budget >= (count - 1) * settings.sequence_length + 1
         )
         if not enough:
             raise ValueError(
-                "first source's first epoch cannot supply --count windows; omit --first-source-only"
+                "the first source cannot supply --count windows; omit --first-source-only"
             )
     pad_id = special_token_id(tokenizer, "<|pad|>")
     examples = []
-    for epoch, budgets in enumerate(prepared.budgets):
-        for batch_index, batch in iter_dataset_packed_batches(
-            prepared.train,
-            budgets,
-            settings.sequence_length,
-            settings.packing_stride,
-            pad_id,
-            batch_size=settings.batch_size,
-            seed=epoch_seed(settings, epoch),
-            shuffle_per_epoch=settings.shuffle_per_epoch,
-            shuffle_data=settings.shuffle_data,
-            unit_lengths=prepared.unit_lengths,
-            window_counts=prepared.windows[epoch],
-        ):
-            for position, source in enumerate(batch.sources):
-                valid_targets = int(batch.target_mask[position].sum().item())
-                inputs = batch.input_ids[position].tolist()
-                targets = batch.targets[position].tolist()
-                examples.append(
-                    {
-                        "number": len(examples) + 1,
-                        "epoch": epoch + 1,
-                        "source": source,
-                        "batch": batch_index,
-                        "batch_position": position,
-                        "valid_targets": valid_targets,
-                        "base_tokens": target_units(
-                            batch.slice(position, position + 1), prepared.unit_lengths
-                        ),
-                        "input_text": tokenizer.decode(
-                            inputs, skip_special_tokens=False
-                        ),
-                        "target_text": tokenizer.decode(
-                            targets[:valid_targets], skip_special_tokens=False
-                        ),
-                        "input_ids": inputs,
-                        "target_ids": targets,
-                        "target_mask": batch.target_mask[position].tolist(),
-                    }
-                )
-                if len(examples) == count:
-                    return examples
+    for batch_index, batch in iter_dataset_packed_batches(
+        prepared.train,
+        prepared.budgets,
+        settings.sequence_length,
+        settings.packing_stride,
+        pad_id,
+        batch_size=settings.batch_size,
+        seed=settings.seed,
+        shuffle_data=settings.shuffle_data,
+        unit_lengths=prepared.unit_lengths,
+        window_counts=prepared.windows,
+    ):
+        for position, source in enumerate(batch.sources):
+            valid_targets = int(batch.target_mask[position].sum().item())
+            inputs = batch.input_ids[position].tolist()
+            targets = batch.targets[position].tolist()
+            examples.append(
+                {
+                    "number": len(examples) + 1,
+                    "source": source,
+                    "batch": batch_index,
+                    "batch_position": position,
+                    "valid_targets": valid_targets,
+                    "base_tokens": target_units(
+                        batch.slice(position, position + 1), prepared.unit_lengths
+                    ),
+                    "input_text": tokenizer.decode(
+                        inputs, skip_special_tokens=False
+                    ),
+                    "target_text": tokenizer.decode(
+                        targets[:valid_targets], skip_special_tokens=False
+                    ),
+                    "input_ids": inputs,
+                    "target_ids": targets,
+                    "target_mask": batch.target_mask[position].tolist(),
+                }
+            )
+            if len(examples) == count:
+                return examples
     raise ValueError(
         f"training produces only {len(examples)} packed examples; requested {count}"
     )

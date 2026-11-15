@@ -30,7 +30,7 @@ class TrainingRunTests(unittest.TestCase):
                     tiny_tokenizer(),
                     data,
                     tiny_settings(
-                        max_validation_tokens=0, validation_device=backend, num_epochs=2
+                        max_validation_tokens=0, validation_device=backend
                     ),
                     tiny_config(),
                     directory,
@@ -41,7 +41,7 @@ class TrainingRunTests(unittest.TestCase):
                 run = Path(directory) / "tiny"
                 meta = read_json(run / "model_meta.json")
                 self.assertTrue(meta["training_finished"])
-                self.assertEqual(meta["tokens_seen"], 8)
+                self.assertEqual(meta["tokens_seen"], 4)
                 self.assertIsNone(meta["validation"])
                 self.assertEqual(meta.get("validation_results", []), [])
                 self.assertEqual(meta["validation_failures"], [])
@@ -51,13 +51,12 @@ class TrainingRunTests(unittest.TestCase):
                     (run / "training.log").read_text(),
                 )
 
-    def test_three_epochs_each_consume_the_full_budget_and_validate(self):
+    def test_single_pass_consumes_the_budget_once_and_validates_at_the_end(self):
         settings = tiny_settings(
             batch_size=2,
             minibatch_size=1,
             dataset_token_counts={"fixture": 5},
             max_train_tokens=5,
-            num_epochs=3,
             checkpoint_interval_steps=1000,
             checkpoint_keep_last=3,
             max_validation_tokens=2,
@@ -78,22 +77,22 @@ class TrainingRunTests(unittest.TestCase):
             run = Path(directory) / "tiny"
             meta = read_json(run / "model_meta.json")
             self.assertTrue(meta["training_finished"])
-            self.assertEqual(meta["tokens_seen"], 15)
-            self.assertEqual(meta["global_step"], 6)
-            self.assertEqual(meta["training_state"]["epoch"], 3)
+            self.assertEqual(meta["tokens_seen"], 5)
+            self.assertEqual(meta["global_step"], 2)
+            self.assertEqual(meta["manifest"]["manifest_version"], 3)
+            self.assertNotIn("num_epochs", meta["manifest"]["identity"]["training"])
             self.assertEqual(
-                [result["step"] for result in meta["validation_results"]], [2, 4, 6]
+                [result["step"] for result in meta["validation_results"]], [2]
             )
             log = (run / "training.log").read_text()
-            self.assertIn("5 targets per epoch for 3 epochs (15 total)", log)
-            for epoch, step in ((1, 2), (2, 4), (3, 6)):
-                self.assertIn(f"Epoch {epoch}/3: loss", log)
-                self.assertIn(f"tokens 5/5 this epoch, total {epoch * 5}/15", log)
-                checkpoint = torch.load(
-                    run / f"checkpoint_step_{step:08d}.pt", weights_only=False
-                )
-                self.assertEqual(checkpoint["training_state"]["tokens_seen"], epoch * 5)
-                self.assertEqual(checkpoint["scheduler_state_dict"]["last_epoch"], step)
+            self.assertIn("Training 5 targets from step 0", log)
+            self.assertIn("Training pass: loss", log)
+            self.assertIn("tokens 5/5", log)
+            checkpoint = torch.load(run / "checkpoint_step_00000002.pt", weights_only=False)
+            self.assertEqual(checkpoint["schema_version"], 5)
+            self.assertEqual(checkpoint["training_state"]["tokens_seen"], 5)
+            self.assertNotIn("epoch", checkpoint["training_state"])
+            self.assertEqual(checkpoint["scheduler_state_dict"]["last_epoch"], 2)
 
     def test_small_run_retains_latest_checkpoint_and_archives_inputs(self):
         with (
@@ -238,7 +237,7 @@ class TrainingRunTests(unittest.TestCase):
             self.assertEqual([record["step"] for record in snapshots[0]], [1, 2])
             self.assertEqual([record["step"] for record in snapshots[1]], [1, 2, 2])
 
-    def test_resume_across_shuffled_source_and_epoch_boundaries(self):
+    def test_resume_across_mixed_source_boundaries(self):
         from datasets import Dataset
 
         from fraise.data.types import TrainingData
@@ -252,8 +251,6 @@ class TrainingRunTests(unittest.TestCase):
         settings = tiny_settings(
             batch_size=2,
             minibatch_size=1,
-            num_epochs=2,
-            shuffle_per_epoch=True,
             shuffle_data=True,
             dataset_token_counts={"first": 11, "second": 4},
             max_train_tokens=15,
@@ -273,13 +270,12 @@ class TrainingRunTests(unittest.TestCase):
                 device="cpu",
             )
             final = torch.load(
-                Path(directory) / "tiny" / "checkpoint_step_00000008.pt",
+                Path(directory) / "tiny" / "checkpoint_step_00000004.pt",
                 weights_only=False,
             )
-            self.assertEqual(final["training_state"]["tokens_seen"], 30)
-            self.assertEqual(final["training_state"]["epoch"], 2)
-            self.assertEqual(final["scheduler_state_dict"]["last_epoch"], 8)
-            for step in (1, 4, 5, 8):
+            self.assertEqual(final["training_state"]["tokens_seen"], 15)
+            self.assertEqual(final["scheduler_state_dict"]["last_epoch"], 4)
+            for step in (1, 2, 3, 4):
                 checkpoint = Path(directory) / "tiny" / f"checkpoint_step_{step:08d}.pt"
                 resumed = pretrain_model(
                     tiny_tokenizer(),
