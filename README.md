@@ -1,7 +1,89 @@
 # Fraise
 
 Fraise explores language models with a large macro input vocabulary and a smaller
-base output vocabulary, as described in [PoC.md](PoC.md). Implemented stages:
+base output vocabulary. The global transformer reads 64k macro tokens, each of which
+decomposes deterministically into tokens of an 8k base vocabulary, and generation
+happens through that base vocabulary. The question is whether macro tokens can cut
+the number of expensive global transformer steps (and KV-cache entries) without
+permanently hiding the information inside them.
+
+## Proof of concept
+
+The first experiment tests hierarchical asymmetric tokenization at a scale small
+enough for rapid local iteration (one RTX 5090 Laptop GPU, 24 GB VRAM, 32 GB RAM)
+but large enough to produce meaningful language-model behavior: a ~50M-parameter
+dense transformer (`d_model` 512, BF16) with an 8,192-token base/output vocabulary
+and a 65,536-token macro/input vocabulary. The 8k output is deliberately smaller than
+in conventional modern LLMs, so any gain cannot be explained simply by a larger
+vocabulary everywhere. Sparse lexical parameters are reported separately from the
+dense transformer.
+
+**Token representation.** Instead of an independent embedding per macro, a macro's
+input is a shared composition of its constituent base-token embeddings plus a learned
+32-dimensional macro-specific residual projected to the model width. Common macros
+can learn specialized representations, while rare ones fall back on information
+shared with their better-trained constituents.
+
+**Autoregression.** Macro decompositions are stored in a trie. A local decoder emits
+base tokens while walking it; once a complete macro is chosen, its representation is
+fed to the global transformer as the next input. Multi-token prediction (MTP) is a
+planned optimization of this local stage, proposing several base tokens between
+global transformer passes.
+
+**Dynamic decomposition** (planned). A macro can be expanded when its internal
+structure matters, so a token exists at several resolutions:
+
+```text
+[strawberry]
+[straw] [berry]
+[s] [t] [r] [a] [w] [b] [e] [r] [r] [y]
+```
+
+This keeps spelling, morphology, numbers, identifiers and rare words accessible
+despite aggressive macro tokenization, and gives difficult spans extra transformer
+positions and KV-cache entries while ordinary spans stay compressed.
+
+**Training data.** The target budget is about 40 base tokens per dense parameter
+(about 2B base tokens for 50M parameters) from FineWeb-Edu. Budgets are counted in
+base tokens rather than each model's native tokens, so every architecture sees the
+same underlying text from a fixed subset.
+
+**Baselines and ablations.** All models share roughly the same dense parameter
+budget and data:
+
+| Model | Input vocabulary | Output vocabulary | Purpose |
+| --- | --: | --: | --- |
+| `base-8k` | 8k | 8k | Small-vocabulary conventional baseline |
+| `hier-64k` | 64k | 64k | Larger-vocabulary conventional baseline |
+| `fraise-64-8` | 64k | 8k | Asymmetric architecture |
+
+Ablations isolate independent vs. compositional macro representations, macro
+residuals (on/off and their width), trie-based bridging, MTP, static vs. dynamic
+decomposition, and the decomposition budget.
+
+**Evaluation.** Token-level perplexity is not comparable across tokenizations, so the
+primary metric is bits per byte (BPB); held-out loss is also tracked within each
+tokenizer. Token-internal reasoning is to be measured with CharBench, CUTE, and
+synthetic tests of spelling, morphology, numbers, identifiers, rare words and unseen
+compositions, split by frequent macros, rare macros, unseen combinations of known
+base tokens, and novel strings. Efficiency covers global positions per byte, macro
+compression ratio, decompositions per sequence, KV-cache entries per byte, training
+and inference throughput, peak VRAM, and the quality-versus-decomposition-compute
+curve.
+
+**Success criterion.** The proof of concept need not beat larger models. It succeeds
+if asymmetric hierarchical tokenization shows a favorable tradeoff between
+language-model quality, global transformer computation, sequence/KV-cache length, and
+access to fine-grained token structure.
+
+The model is written directly in PyTorch rather than a high-level LLM training
+framework, because it needs custom composition, trie decoding, and eventually MTP,
+decomposition and variable-resolution KV caches. Results of the first pilot are in
+[docs/reports/2026-10-31-fraise-pilot-report.md](docs/reports/2026-10-31-fraise-pilot-report.md).
+
+### Implemented stages
+
+Each stage stays independently trainable and evaluable:
 
 1. Baselines `base-8k` and `base-64k`: the `transformer` architecture with an 8k or a
    64k byte-level BPE tokenizer.
@@ -138,7 +220,7 @@ base tokenizer and its checksum, so runs archive it like any tokenizer and
 
 ### Budgets count base tokens
 
-PoC comparisons need every architecture to see the same text, so token budgets
+Proof-of-concept comparisons need every architecture to see the same text, so token budgets
 (`dataset_token_counts`, `max_train_tokens`, `max_validation_tokens`) always count
 base tokens. With a macro tokenizer a target macro counts as its decomposition
 length. Downloads are selected with the base tokenizer, so a macro run and an 8k

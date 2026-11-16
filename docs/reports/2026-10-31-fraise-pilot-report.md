@@ -91,7 +91,7 @@ architectural decisions are open.
     exceeds the whole macro-vs-base gap, so
     under text-level (marginal) scoring the ranking against base is not known.
 - **Open decisions for the project owner:** numeric success thresholds, a deployment
-  setting (batch, context, memory) and a compute budget. None is given in `PoC.md`;
+  setting (batch, context, memory) and a compute budget. None is given in the PoC plan;
   §7.3 proposes thresholds.
 - **Leading hypotheses (opinion, §7).**
   - Fraise's global states h_t are less informative, being trained only through the
@@ -112,10 +112,8 @@ architectural decisions are open.
 
 ## 1. Project goal and success criteria
 
-"PoC" means proof of concept; `PoC.md` is the project's proof-of-concept
-specification.
-
-The project is specified in `PoC.md` (repository root). In short:
+"PoC" means proof of concept. The project's proof-of-concept plan is described in
+the README ("Proof of concept"). In short:
 
 - **Asymmetric vocabularies.**
   - The global transformer reads macro tokens (64k vocabulary). Every macro has a
@@ -131,7 +129,7 @@ The project is specified in `PoC.md` (repository root). In short:
 - **Trie-based autoregression.**
   - A local decoder emits base tokens while walking a trie of macro decompositions.
   - When a complete macro is chosen, its macro ID is fed to the global transformer.
-- **PoC implementation stages** (from `PoC.md`; each should be independently
+- **PoC implementation stages** (from the PoC plan; each should be independently
   trainable and evaluable):
   1. 8k/8k baseline. *Done.*
   2. 64k/64k baseline. *Done (symmetric).*
@@ -143,7 +141,7 @@ The project is specified in `PoC.md` (repository root). In short:
   7. Multi-token prediction (MTP) in the local decoder: propose several base tokens
      between global steps. *Not built.*
   8. Dynamic decomposition: expand chosen macros into base tokens to give hard spans
-     extra global positions and KV entries. *Not built.* `PoC.md` does not specify
+     extra global positions and KV entries. *Not built.* The PoC plan does not specify
      how spans are chosen (learned, heuristic or uncertainty-based).
   9. Variable-resolution / hierarchical KV-cache experiments. *Not built.*
 - **Evaluation axes in the PoC.**
@@ -155,14 +153,13 @@ The project is specified in `PoC.md` (repository root). In short:
     codebase yet.
   - Efficiency: global positions per byte, KV entries per byte, throughput, VRAM, and
     a quality-vs-decomposition-compute curve.
-- **Success criterion** (paraphrase of `PoC.md`). A *favourable tradeoff* between
+- **Success criterion** (paraphrase of the PoC plan). A *favourable tradeoff* between
   language-model quality, global transformer computation, sequence/KV length, and
   access to fine-grained token structure. The PoC does not require beating every
-  baseline on raw BPB at equal tokens. **`PoC.md` gives no numeric thresholds** for
+  baseline on raw BPB at equal tokens. **The PoC plan gives no numeric thresholds** for
   any of these axes. It also specifies no deployment setting (batch size, context
   length, memory limits) and no total compute budget beyond the local single-GPU
-  hardware. `PoC.md` is not reproduced here; this paraphrase is the only account of
-  it in this document. Turning "favourable" into go/no-go numbers is an open decision for
+  hardware. Turning "favourable" into go/no-go numbers is an open decision for
   the project owner; §7.3 offers a proposal, labelled as opinion.
 - **Training budget convention.** Budgets are measured in **base (8k) tokens**, so all
   architectures train on the same underlying text. The PoC target is ~40 base tokens
@@ -564,7 +561,7 @@ hidden states h_t.
 - `local_dim` = 768 and `local_num_layers` = 2 were the author's untuned choices
   (local_dim set equal to d).
 - Other choices and their origins:
-  - from `PoC.md`: the 64k macro vocabulary and the 32-d residual dimension;
+  - from the PoC plan: the 64k macro vocabulary and the 32-d residual dimension;
   - the author's own: `max_macro_length` = 8 and separate input (E) and local (E′)
     base tables. Neither was tuned.
 - Scales at initialization: each prefix term g′ᵢ ⊙ E′[bᵢ] has per-component std ≈ 1,
@@ -1374,7 +1371,7 @@ post-hoc hint and E4 the definitive test for B5.
   part of the inside cost, §5.5e).
 - Stage 8 (dynamic decomposition) would give some spans per-base-token global steps,
   which removes both the boundary *and* inside decisions for those spans.
-- Its value therefore depends on how well spans are selected, which `PoC.md` leaves
+- Its value therefore depends on how well spans are selected, which the PoC plan leaves
   open. The decomposition by decision type does not by itself argue for or against
   stage 8.
 - Reducing the boundary cost needs either better slot-0 prediction (B) or less
@@ -1432,7 +1429,7 @@ Code status: none of these is implemented. Each needs new code (~1–3 h) unless
 - *(state of evidence)* The training-positions comparison is open (§5.4, E0).
 - *(fact)* KV entries and global decode steps per byte at inference are ~0.59× for
   the macro models (§5.4). Whether that saving matters depends on the deployment
-  setting, which `PoC.md` does not specify.
+  setting, which the PoC plan does not specify.
 - *(speculative)* Scale effects:
   - The output-head share of compute falls as the transformer grows. At ~1B dense
     parameters (d=2048) a 65,536-way head is ~13% of per-position transformer
