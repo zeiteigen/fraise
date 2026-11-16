@@ -8,9 +8,9 @@ three runs, each with the hierarchy its own run was trained with:
 
 | Default | Tokenizer | Hierarchy shown |
 | --- | --- | --- |
-| `pilot-bpe8k` | `bpe-8k` (8k byte-level BPE) | none (plain BPE) |
-| `pilot-macro64k` | `macro-64k` (64k macro over `bpe-8k`) | none (`independent` embeddings) |
-| `pilot-fraise` | `macro-64k` in, `bpe-8k` out | two-level 8k → 64k, 32-d residuals |
+| `pilot-base-8k` | `bpe-8k` (8k byte-level BPE) | none (plain BPE) |
+| `pilot-hier-64k` | `hierarchical-64k` (64k hierarchical tokenizer over `bpe-8k`) | none (`independent` embeddings) |
+| `pilot-fraise-64-8` | `hierarchical-64k` in, `bpe-8k` out | two-level 8k → 64k, 32-d residuals |
 
 Other configurations: a tokenizer's default two-level hierarchy, merge-prefix levels, a file in
 `DATA_DIR/hierarchies/`, or segmentation only. Each card shows the segmentation strips, the

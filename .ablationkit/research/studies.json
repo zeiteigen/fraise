@@ -25,23 +25,23 @@
         }
       ],
       "status": "complete",
-      "title": "PoC pilot: base 8k vs symmetric 64k vs Fraise at 100M dense, 500M FineWeb-Edu base tokens",
-      "summary": "Compares the three proof-of-concept models (the 8k/8k transformer, the 64k/64k transformer on the macro tokenizer, and Fraise, 64k in and 8k out) with the same 99.2M-parameter transformer on the same 500M base tokens of FineWeb-Edu text, by held-out bits per byte (BPB), to see what reading a large macro vocabulary costs or gains at equal text. The three imported runs put the 8k/8k transformer first (1.130), the 64k/64k model second (1.194) and Fraise third (1.233). One seed each, more optimizer steps for the macro models, and two training faults later found in both transformer baselines mean this ranking overstates the cost of a 64k vocabulary; the pilot has not been re-run with the fixes.",
+      "title": "PoC pilot: base-8k vs Hierarchical-only 64k vs Fraise 64/8 at 100M dense, 500M base tokens",
+      "summary": "Compares the three proof-of-concept models (base-8k, Hierarchical-only 64k — the 64k transformer on the hierarchical tokenizer — and Fraise 64/8, 64k in and 8k out) with the same 99.2M-parameter transformer on the same 500M base tokens of FineWeb-Edu text, by held-out bits per byte (BPB), to see what reading a large hierarchical vocabulary costs or gains at equal text. The three imported runs put base-8k first (1.130), Hierarchical-only 64k second (1.194) and Fraise 64/8 third (1.233). One seed each, more optimizer steps for the hierarchical models, and two training faults later found in both transformer baselines mean this ranking overstates the cost of a 64k vocabulary; the pilot has not been re-run with the fixes.",
       "variants": [
         {
           "variant_id": "base-8k",
-          "title": "Base 8k/8k transformer (byte-level BPE base-8192)",
-          "description": "The baseline: a standard transformer reading and writing the 8,192-token byte-level BPE, batch 64 × 512 positions, AdamW 1e-3. It is the small-vocabulary conventional model Fraise has to beat on quality per unit of compute."
+          "title": "base-8k: 8k transformer (byte-level BPE bpe-8k)",
+          "description": "The baseline: a standard transformer reading and writing the 8,192-token byte-level BPE, batch 64 × 512 positions, AdamW 1e-3. It is the small-vocabulary conventional model Fraise 64/8 has to beat on quality per unit of compute. Local folder pilot-base-8k (MLflow name pilot-base)."
         },
         {
           "variant_id": "symmetric-64k",
-          "title": "Symmetric 64k/64k transformer on the macro tokenizer",
-          "description": "The same transformer reading and writing the 65,536-token macro tokenizer (about 41% fewer positions per byte), batch 32, AdamW 3e-3. It is the large-vocabulary conventional model: Fraise shares its input side and tokenizer, so the two differ only in how the next macro is predicted."
+          "title": "Hierarchical-only 64k: 64k transformer on the hierarchical tokenizer",
+          "description": "The same transformer reading and writing the 65,536-token hierarchical tokenizer (about 41% fewer positions per byte) with an independent embedding row per token, batch 32, AdamW 3e-3. Fraise 64/8 shares its input side and tokenizer, so the two differ only in how macros are embedded and how the next macro is predicted. Local folder pilot-hier-64k (MLflow name pilot-symmetric)."
         },
         {
           "variant_id": "fraise",
-          "title": "Fraise 64k-in / 8k-out (compositional embeddings, 32-d residuals, local decoder)",
-          "description": "Fraise: macro inputs composed from base-token embeddings plus a 32-dimensional learned residual, the same transformer over macro positions, and a 10.1M-parameter local decoder that predicts the next macro's base tokens and END. Batch 32, AdamW 3e-3, as for the 64k/64k model."
+          "title": "Fraise 64/8: compositional 64k in, 8k out (32-d residuals, local decoder)",
+          "description": "Fraise 64/8: macro inputs composed from base-token embeddings plus a 32-dimensional learned residual, the same transformer over macro positions, and a 10.1M-parameter local decoder that predicts the next macro's base tokens and END. Batch 32, AdamW 3e-3, as for Hierarchical-only 64k. Local folder pilot-fraise-64-8 (MLflow name pilot-fraise)."
         }
       ],
       "baseline_variant": "base-8k",
@@ -51,19 +51,19 @@
           "goal": "min"
         }
       ],
-      "protocol": "Commit d0fc54e (run from the t3 worktree t3-0e6f556d; dirty). Models: configs/100m/{base,symmetric,fraise}.json (d=768, 14 layers, 12x64 heads, SwiGLU 2048, context 512). Data: FineWeb-Edu sample-10BT in stream order, 500,000,000 base tokens per run, 1 epoch, shuffle_data true. Base: batch 64 (minibatch 32), AdamW 1e-3 (configs/pilot-base.json). Symmetric and Fraise: batch 32, AdamW 3e-3 (configs/pilot-macro.json). Muon 0.02, warmup 200, weight decay 0.01, clip 1.0, BF16 + torch.compile, seed 1337, one seed per variant. Validation every 2,000 steps on CPU over 262,144 base tokens of the 0.05 GB held-out FineWeb-Edu prefix. Compare on validation/bits_per_byte only: validation/loss is per macro for 64k models and per base token for base 8k, so it is not comparable across variants. Note the step-count confound (15,259 vs 17,896 optimizer steps). Runs so far are imported, not re-run under AblationKit.",
+      "protocol": "Commit d0fc54e (run from the t3 worktree t3-0e6f556d; dirty). Models: configs/100m/{8k,64k,fraise}.json (d=768, 14 layers, 12x64 heads, SwiGLU 2048, context 512). Data: FineWeb-Edu sample-10BT in stream order, 500,000,000 base tokens per run, 1 epoch, shuffle_data true. base-8k: batch 64 (minibatch 32), AdamW 1e-3 (configs/pilot-base-8k.json). Hierarchical-only 64k and Fraise 64/8: batch 32, AdamW 3e-3 (configs/pilot-hier-64k.json). Muon 0.02, warmup 200, weight decay 0.01, clip 1.0, BF16 + torch.compile, seed 1337, one seed per variant. Validation every 2,000 steps on CPU over 262,144 base tokens of the 0.05 GB held-out FineWeb-Edu prefix. Compare on validation/bits_per_byte only: validation/loss is per macro for 64k models and per base token for base-8k, so it is not comparable across variants. Note the step-count confound (15,259 vs 17,896 optimizer steps). Runs are imported, not re-run under AblationKit; MLflow run names keep the old names (pilot-base, pilot-symmetric, pilot-fraise).",
       "created_at": "2026-11-10T20:48:20.833Z",
-      "updated_at": "2026-11-11T07:34:30.446Z",
+      "updated_at": "2026-11-15T23:25:26.920Z",
       "created_by": {
         "kind": "agent",
         "id": "6830bb2a421e119b"
       },
       "updated_by": {
         "kind": "agent",
-        "id": "ad3b2040fd9751d0"
+        "id": "57f0e844def93532"
       },
-      "revision": 2,
-      "body": "## Why this comparison\n\nThe project's claim is that Fraise gives a better tradeoff between language-model quality, global transformer computation, sequence and KV-cache length, and access to the text inside tokens than either conventional baseline. The pilot is the first comparison at a size where the models learn real language: the same 99.2M-parameter transformer (d = 768, 14 layers, context 512 positions) in all three, trained on identical text, with budgets counted in base tokens so that each model sees the same bytes whatever its tokenizer.\n\nBits per byte (BPB) is the summed negative log-likelihood of the held-out targets, in bits, divided by the UTF-8 bytes those targets cover:\n\n$$\n\\mathrm{BPB} = \\frac{1}{B \\ln 2} \\sum_{t} -\\ln p(x_t \\mid x_{<t})\n$$\n\nwhere $B$ is the number of bytes scored. Unlike a per-token loss it does not depend on the tokenizer, so it compares models with 8k and 64k vocabularies directly. Lower is better.\n\nValidation loss is per macro for the 64k models and per base token for the 8k/8k, so only BPB is compared across variants.\n\n## Variants\n\n| Variant | Input / output vocabulary | Batch (steps) | AdamW | Final BPB |\n| --- | --- | --- | --- | ---: |\n| base-8k (baseline) | 8k / 8k | 64 × 512 (15,259) | 1e-3 | 1.1302 |\n| symmetric-64k | 64k / 64k, macro tokenizer | 32 × 512 (17,896) | 3e-3 | 1.1940 |\n| fraise | 64k / 8k | 32 × 512 (17,896) | 3e-3 | 1.2332 |\n\nFraise adds a 10.1M-parameter dense local decoder to the shared transformer (109.3M dense in total). The learning rates are the best of the 38M sweep; the batch for the macro models was a deliberate choice of the project owner, recorded as a decision.\n\n## Reading the result\n\n- All three runs were imported from their files, not re-run under AblationKit; they come from commit d0fc54e in a separate, dirty worktree.\n- One seed per variant: seed variance is unmeasured. The pilot report's bootstrap intervals over a larger held-out set (13.5M tokens) cover sampling of the validation text only.\n- The macro models took 17% more optimizer steps at a smaller batch and a higher learning rate; at 38M parameters, doubling the 64k/64k model's steps later made no difference.\n- Both transformer baselines kept untied embeddings at N(0,1) and had no final LayerNorm. At 38M parameters, fixing both cut the 64k/64k model's gap to the 8k/8k from 0.152 to 0.085 BPB, and a standard 64k BPE closed it. Fraise already normalises its state before its decoder, so the Fraise-against-baseline differences here are also confounded.\n- The comparison is at equal text. At equal transformer compute (equal positions) the pilot report finds the answer not established, because the 8k/8k value would have to be read before its learning rate had annealed."
+      "revision": 3,
+      "body": "## Why this comparison\n\nThe project's claim is that Fraise 64/8 gives a better tradeoff between language-model quality, global transformer computation, sequence and KV-cache length, and access to the text inside tokens than either conventional baseline. The pilot is the first comparison at a size where the models learn real language: the same 99.2M-parameter transformer (d = 768, 14 layers, context 512 positions) in all three, trained on identical text, with budgets counted in base tokens so that each model sees the same bytes whatever its tokenizer.\n\nBits per byte (BPB) is the summed negative log-likelihood of the held-out targets, in bits, divided by the UTF-8 bytes those targets cover:\n\n$$\n\\mathrm{BPB} = \\frac{1}{B \\ln 2} \\sum_{t} -\\ln p(x_t \\mid x_{<t})\n$$\n\nwhere $B$ is the number of bytes scored. Unlike a per-token loss it does not depend on the tokenizer, so it compares models with 8k and 64k vocabularies directly. Lower is better.\n\nValidation loss is per macro for the 64k models and per base token for base-8k, so only BPB is compared across variants.\n\n## Variants\n\n| Variant | Model | Input / output vocabulary | Batch (steps) | AdamW | Final BPB |\n| --- | --- | --- | --- | --- | ---: |\n| base-8k (baseline) | base-8k | 8k / 8k | 64 × 512 (15,259) | 1e-3 | 1.1302 |\n| symmetric-64k | Hierarchical-only 64k | 64k / 64k, hierarchical tokenizer | 32 × 512 (17,896) | 3e-3 | 1.1940 |\n| fraise | Fraise 64/8 | 64k / 8k | 32 × 512 (17,896) | 3e-3 | 1.2332 |\n\nFraise 64/8 adds a 10.1M-parameter dense local decoder to the shared transformer (109.3M dense in total). The learning rates are the best of the 38M sweep; the batch for the hierarchical models was a deliberate choice of the project owner, recorded as a decision.\n\n## Reading the result\n\n- All three runs were imported from their files, not re-run under AblationKit; they come from commit d0fc54e in a separate, dirty worktree.\n- One seed per variant: seed variance is unmeasured. The pilot report's bootstrap intervals over a larger held-out set (13.5M tokens) cover sampling of the validation text only.\n- The hierarchical models took 17% more optimizer steps at a smaller batch and a higher learning rate; at 38M parameters, doubling Hierarchical-only 64k's steps later made no difference.\n- Both transformer baselines kept untied embeddings at N(0,1) and had no final LayerNorm. At 38M parameters, fixing both cut Hierarchical-only 64k's gap to base-8k from 0.152 to 0.085 BPB, and base-64k (a standard 64k BPE) closed it. Fraise 64/8 already normalises its state before its decoder, so the Fraise-against-baseline differences here are also confounded.\n- The comparison is at equal text. At equal transformer compute (equal positions) the pilot report finds the answer not established, because the base-8k value would have to be read before its learning rate had annealed."
     },
     {
       "schema_version": 1,
@@ -83,52 +83,52 @@
       ],
       "status": "complete",
       "title": "AdamW learning-rate sweep at 38M dense, 50M FineWeb-Edu base tokens",
-      "summary": "Sweeps the AdamW learning rate over 3e-3, 1e-3 and 3e-4 for each of the 8k/8k transformer, the 64k/64k transformer on the macro tokenizer and Fraise (64k in, 8k out) at 38M parameters and 50M base tokens of text, with Muon fixed at 0.02, to choose learning rates for the 100M pilot. The 8k/8k model is best at 1e-3 (1.4087 bits per byte, BPB) and both macro models at 3e-3, the largest rate tried (64k/64k 1.5602, Fraise 1.5408), so their optimum may be higher; Fraise beats the 64k/64k model at every rate. One seed per run, imported from files, and the transformer runs carry the two training faults found later by the gap audit.",
+      "summary": "Sweeps the AdamW learning rate over 3e-3, 1e-3 and 3e-4 for each of base-8k (the 8k transformer), Hierarchical-only 64k (the 64k transformer on the hierarchical tokenizer) and Fraise 64/8 (64k in, 8k out) at 38M parameters and 50M base tokens of text, with Muon fixed at 0.02, to choose learning rates for the 100M pilot. base-8k is best at 1e-3 (1.4087 bits per byte, BPB) and both hierarchical models at 3e-3, the largest rate tried (Hierarchical-only 64k 1.5602, Fraise 64/8 1.5408), so their optimum may be higher; Fraise 64/8 beats Hierarchical-only 64k at every rate. One seed per run, imported from files, and the transformer runs carry the two training faults found later by the gap audit.",
       "variants": [
         {
           "variant_id": "base-adamw-3e-3",
-          "title": "Base 8k, AdamW 3e-3",
-          "description": "The 8k/8k transformer at AdamW 3e-3, three times the baseline rate (minibatch 16)."
+          "title": "base-8k, AdamW 3e-3",
+          "description": "base-8k at AdamW 3e-3, three times the baseline rate (minibatch 16). Local folder sweep-base-8k-0.003."
         },
         {
           "variant_id": "base-adamw-1e-3",
-          "title": "Base 8k, AdamW 1e-3",
-          "description": "The baseline: the 8k/8k transformer at AdamW 1e-3, its best rate and the one the pilot used."
+          "title": "base-8k, AdamW 1e-3",
+          "description": "The baseline: base-8k at AdamW 1e-3, its best rate and the one the pilot used. Local folder sweep-base-8k-0.001."
         },
         {
           "variant_id": "base-adamw-3e-4",
-          "title": "Base 8k, AdamW 3e-4",
-          "description": "The 8k/8k transformer at AdamW 3e-4, a third of the baseline rate."
+          "title": "base-8k, AdamW 3e-4",
+          "description": "base-8k at AdamW 3e-4, a third of the baseline rate. Local folder sweep-base-8k-0.0003."
         },
         {
           "variant_id": "symmetric-adamw-3e-3",
-          "title": "Symmetric 64k, AdamW 3e-3",
-          "description": "The 64k/64k transformer on the macro tokenizer at AdamW 3e-3, its best rate and the one the pilot used (minibatch 16)."
+          "title": "Hierarchical-only 64k, AdamW 3e-3",
+          "description": "Hierarchical-only 64k (the 64k transformer on the hierarchical tokenizer, an independent embedding per token) at AdamW 3e-3, its best rate and the one the pilot used (minibatch 16). Local folder sweep-hier-64k-0.003."
         },
         {
           "variant_id": "symmetric-adamw-1e-3",
-          "title": "Symmetric 64k, AdamW 1e-3",
-          "description": "The 64k/64k transformer on the macro tokenizer at the baseline's rate, AdamW 1e-3."
+          "title": "Hierarchical-only 64k, AdamW 1e-3",
+          "description": "Hierarchical-only 64k at the baseline's rate, AdamW 1e-3. Local folder sweep-hier-64k-0.001."
         },
         {
           "variant_id": "symmetric-adamw-3e-4",
-          "title": "Symmetric 64k, AdamW 3e-4",
-          "description": "The 64k/64k transformer on the macro tokenizer at AdamW 3e-4."
+          "title": "Hierarchical-only 64k, AdamW 3e-4",
+          "description": "Hierarchical-only 64k at AdamW 3e-4. Local folder sweep-hier-64k-0.0003."
         },
         {
           "variant_id": "fraise-adamw-3e-3",
-          "title": "Fraise, AdamW 3e-3",
-          "description": "Fraise (64k in, 8k out) at AdamW 3e-3, its best rate and the one the pilot used (minibatch 16 after running out of memory at 64)."
+          "title": "Fraise 64/8, AdamW 3e-3",
+          "description": "Fraise 64/8 (64k in, 8k out) at AdamW 3e-3, its best rate and the one the pilot used (minibatch 16 after running out of memory at 64). Local folder sweep-fraise-64-8-0.003."
         },
         {
           "variant_id": "fraise-adamw-1e-3",
-          "title": "Fraise, AdamW 1e-3",
-          "description": "Fraise (64k in, 8k out) at the baseline's rate, AdamW 1e-3 (minibatch 16 after running out of memory at 64)."
+          "title": "Fraise 64/8, AdamW 1e-3",
+          "description": "Fraise 64/8 (64k in, 8k out) at the baseline's rate, AdamW 1e-3 (minibatch 16 after running out of memory at 64). Local folder sweep-fraise-64-8-0.001."
         },
         {
           "variant_id": "fraise-adamw-3e-4",
-          "title": "Fraise, AdamW 3e-4",
-          "description": "Fraise (64k in, 8k out) at AdamW 3e-4 (minibatch 16 after running out of memory at 64)."
+          "title": "Fraise 64/8, AdamW 3e-4",
+          "description": "Fraise 64/8 (64k in, 8k out) at AdamW 3e-4 (minibatch 16 after running out of memory at 64). Local folder sweep-fraise-64-8-0.0003."
         }
       ],
       "baseline_variant": "base-adamw-1e-3",
@@ -138,19 +138,19 @@
           "goal": "min"
         }
       ],
-      "protocol": "Commit d0fc54e (t3 worktree t3-0e6f556d; dirty flag varies per run, see each run). 38M-dense models (d=512, 12 layers, 12x64 heads, SwiGLU 1024). 50,000,000 FineWeb-Edu base tokens, batch 64 x 512 positions (macro models: 891 steps; base: 1,526 steps), Muon 0.02, warmup 50, weight decay 0.01, BF16 + torch.compile, seed 1337, one seed per variant. Configs configs/sweep-{lr}.json; minibatch 64, or 16 after an out-of-memory fallback (sweep2.sh; the minibatch actually used is in each run's params). Validation once at the end over 262,144 held-out base tokens. Compare on validation/bits_per_byte only. Runs so far are imported, not re-run under AblationKit.",
+      "protocol": "Commit d0fc54e (t3 worktree t3-0e6f556d; dirty flag varies per run, see each run). 38M-dense models (d=512, 12 layers, 12x64 heads, SwiGLU 1024). 50,000,000 FineWeb-Edu base tokens, batch 64 x 512 positions (hierarchical-tokenizer models: 891 steps; base-8k: 1,526 steps), Muon 0.02, warmup 50, weight decay 0.01, BF16 + torch.compile, seed 1337, one seed per variant. Configs configs/sweep-{lr}.json; minibatch 64, or 16 after an out-of-memory fallback (sweep2.sh; the minibatch actually used is in each run's params). Validation once at the end over 262,144 held-out base tokens. Compare on validation/bits_per_byte only. Runs are imported, not re-run under AblationKit; MLflow run names keep the old names (sweep-base-LR, sweep-symmetric-LR, sweep-fraise-LR), local folders the new ones (sweep-base-8k-LR, sweep-hier-64k-LR, sweep-fraise-64-8-LR).",
       "created_at": "2026-11-10T20:48:28.403Z",
-      "updated_at": "2026-11-11T07:34:30.451Z",
+      "updated_at": "2026-11-15T23:25:09.962Z",
       "created_by": {
         "kind": "agent",
         "id": "6830bb2a421e119b"
       },
       "updated_by": {
         "kind": "agent",
-        "id": "ad3b2040fd9751d0"
+        "id": "57f0e844def93532"
       },
-      "revision": 2,
-      "body": "## Why this comparison\n\nThe pilot needed a learning rate for each architecture, and the macro models, with larger vocabularies and fewer optimizer steps at equal text, could not be assumed to share the 8k/8k transformer's. Muon updates the transformer's weight matrices and was fixed at 0.02; AdamW updates everything else (embeddings, output heads, Fraise's residuals and gates), so its rate is the one swept.\n\nBits per byte (BPB) is the summed negative log-likelihood of the held-out targets, in bits, divided by the UTF-8 bytes those targets cover:\n\n$$\n\\mathrm{BPB} = \\frac{1}{B \\ln 2} \\sum_{t} -\\ln p(x_t \\mid x_{<t})\n$$\n\nwhere $B$ is the number of bytes scored. Unlike a per-token loss it does not depend on the tokenizer, so it compares models with 8k and 64k vocabularies directly. Lower is better.\n\n## Variants\n\nNine runs, three learning rates for each model. All at 38M dense parameters (d = 512, 12 layers, SwiGLU 1024), 50M FineWeb-Edu base tokens, batch 64 × 512 positions, warmup 50, seed 1337. At the same batch in positions the macro models see about 56k base tokens per step against 32k, so they take 891 steps against 1,526.\n\n| Model | AdamW 3e-3 | AdamW 1e-3 | AdamW 3e-4 |\n| --- | ---: | ---: | ---: |\n| 8k/8k transformer (1,526 steps) | 1.4127 | **1.4087** (baseline) | 1.4395 |\n| 64k/64k transformer on the macro tokenizer (891 steps) | **1.5602** | 1.5985 | 1.6944 |\n| Fraise, 64k in, 8k out (891 steps) | **1.5408** | 1.5926 | 1.6795 |\n\n## Reading the result\n\n- One seed per run, so differences of a few thousandths (Fraise against the 64k/64k model at 1e-3, 0.006) may be noise.\n- Both macro models are best at the top of the grid; a higher rate was never tried.\n- The minibatch differs between runs: 16 for the two 3e-3 transformer runs (started before the runner switched to 64) and for all three Fraise runs (out of memory at 64), 64 for the others. A minibatch only splits the 64-sequence step into accumulated parts, so the results are comparable across it.\n- All nine runs were imported from their files (commit d0fc54e, a separate worktree), not re-run under AblationKit. The gap audit later repeated two of them on newer code with the same seed: 1.4087 for the 8k/8k at 1e-3 and 1.5609 for the 64k/64k at 3e-3.\n- The 8k/8k and 64k/64k runs kept untied embeddings at N(0,1) and had no final LayerNorm; with both fixed, the 64k/64k model's gap to the 8k/8k fell from 0.152 to 0.085 BPB. The macro models' preferred rate may differ once those faults are fixed; it has not been re-swept."
+      "revision": 3,
+      "body": "## Why this comparison\n\nThe pilot needed a learning rate for each architecture, and the hierarchical-tokenizer models, with larger vocabularies and fewer optimizer steps at equal text, could not be assumed to share base-8k's. Muon updates the transformer's weight matrices and was fixed at 0.02; AdamW updates everything else (embeddings, output heads, Fraise 64/8's residuals and gates), so its rate is the one swept.\n\nBits per byte (BPB) is the summed negative log-likelihood of the held-out targets, in bits, divided by the UTF-8 bytes those targets cover:\n\n$$\n\\mathrm{BPB} = \\frac{1}{B \\ln 2} \\sum_{t} -\\ln p(x_t \\mid x_{<t})\n$$\n\nwhere $B$ is the number of bytes scored. Unlike a per-token loss it does not depend on the tokenizer, so it compares models with 8k and 64k vocabularies directly. Lower is better.\n\n## Variants\n\nNine runs, three learning rates for each model. All at 38M dense parameters (d = 512, 12 layers, SwiGLU 1024), 50M FineWeb-Edu base tokens, batch 64 × 512 positions, warmup 50, seed 1337. At the same batch in positions the hierarchical-tokenizer models see about 56k base tokens per step against 32k, so they take 891 steps against 1,526.\n\n| Model | AdamW 3e-3 | AdamW 1e-3 | AdamW 3e-4 |\n| --- | ---: | ---: | ---: |\n| base-8k (1,526 steps) | 1.4127 | **1.4087** (baseline) | 1.4395 |\n| Hierarchical-only 64k (891 steps) | **1.5602** | 1.5985 | 1.6944 |\n| Fraise 64/8, 64k in, 8k out (891 steps) | **1.5408** | 1.5926 | 1.6795 |\n\n## Reading the result\n\n- One seed per run, so differences of a few thousandths (Fraise 64/8 against Hierarchical-only 64k at 1e-3, 0.006) may be noise.\n- Both hierarchical-tokenizer models are best at the top of the grid; a higher rate was never tried.\n- The minibatch differs between runs: 16 for the two 3e-3 transformer runs (started before the runner switched to 64) and for all three Fraise 64/8 runs (out of memory at 64), 64 for the others. A minibatch only splits the 64-sequence step into accumulated parts, so the results are comparable across it.\n- All nine runs were imported from their files (commit d0fc54e, a separate worktree), not re-run under AblationKit. The gap audit later repeated two of them on newer code with the same seed: 1.4087 for base-8k at 1e-3 and 1.5609 for Hierarchical-only 64k at 3e-3.\n- The base-8k and Hierarchical-only 64k runs kept untied embeddings at N(0,1) and had no final LayerNorm; with both fixed, Hierarchical-only 64k's gap to base-8k fell from 0.152 to 0.085 BPB. The hierarchical-tokenizer models' preferred rate may differ once those faults are fixed; it has not been re-swept."
     },
     {
       "schema_version": 1,
@@ -193,48 +193,48 @@
         }
       ],
       "status": "complete",
-      "title": "Base 8k vs symmetric 64k gap audit at 38M dense, 50M base tokens",
-      "summary": "Compares the 8k/8k transformer with the 64k/64k transformer on the macro tokenizer at 38M parameters and 50M base tokens of text, adding two candidate fixes one at a time (embedding initialisation with standard deviation 0.02, then a final LayerNorm), to find out why the 64k model trailed by 0.152 bits per byte (BPB). With both fixes the gap fell to 0.085; halving the 64k model's batch to double its optimizer steps changed nothing (1.4996 against 1.4990); and a 64k/64k on a standard BPE with both fixes scored 1.4045, matching the 8k/8k transformer (1.4077 to 1.4139), so the rest of the gap belongs to the macro tokenizer. One seed per variant, at 38M parameters only.",
+      "title": "base-8k vs Hierarchical-only 64k gap audit at 38M dense, 50M base tokens",
+      "summary": "Compares base-8k with Hierarchical-only 64k (the 64k transformer on the hierarchical tokenizer) at 38M parameters and 50M base tokens of text, adding two candidate fixes one at a time (embedding initialisation with standard deviation 0.02, then a final LayerNorm), to find out why the 64k model trailed by 0.152 bits per byte (BPB). With both fixes the gap fell to 0.085; halving Hierarchical-only 64k's batch to double its optimizer steps changed nothing (1.4996 against 1.4990); and base-64k (a 64k transformer on a standard BPE) with both fixes scored 1.4045, matching base-8k (1.4077 to 1.4139), so the rest of the gap belongs to the hierarchical tokenizer. One seed per variant, at 38M parameters only.",
       "variants": [
         {
           "variant_id": "base-default",
-          "title": "Base 8k, AdamW 1e-3, default N(0,1) embedding, no final norm",
-          "description": "The baseline: the 8k/8k transformer with the original settings (untied embeddings at PyTorch's N(0,1) initialisation, no final LayerNorm), AdamW 1e-3. It repeats the earlier sweep's best 8k/8k run on the current code."
+          "title": "base-8k, AdamW 1e-3, default N(0,1) embedding, no final norm",
+          "description": "The baseline: base-8k with the original settings (untied embeddings at PyTorch's N(0,1) initialisation, no final LayerNorm), AdamW 1e-3. It repeats the earlier sweep's best base-8k run on the current code. Local folder gap-base-8k-default (MLflow gap-base-default)."
         },
         {
           "variant_id": "sym-default",
-          "title": "Symmetric 64k, AdamW 3e-3, default N(0,1) embedding, no final norm",
-          "description": "The 64k/64k transformer on the macro tokenizer with the original settings, AdamW 3e-3. Against the baseline it measures the gap before any fix (0.152 BPB)."
+          "title": "Hierarchical-only 64k, AdamW 3e-3, default N(0,1) embedding, no final norm",
+          "description": "Hierarchical-only 64k with the original settings, AdamW 3e-3. Against the baseline it measures the gap before any fix (0.152 BPB). Local folder gap-hier-64k-default (MLflow gap-sym-default)."
         },
         {
           "variant_id": "base-emb002",
-          "title": "Base 8k, embedding init std 0.02",
-          "description": "The 8k/8k transformer with its input embedding table initialised with standard deviation 0.02 instead of N(0,1) (the output head is unchanged); no final LayerNorm. Tests the embedding-initialisation fix on the small vocabulary."
+          "title": "base-8k, embedding init std 0.02",
+          "description": "base-8k with its input embedding table initialised with standard deviation 0.02 instead of N(0,1) (the output head is unchanged); no final LayerNorm. Tests the embedding-initialisation fix on the small vocabulary. Local folder gap-base-8k-emb002 (MLflow gap-base-emb002)."
         },
         {
           "variant_id": "sym-emb002",
-          "title": "Symmetric 64k, embedding init std 0.02",
-          "description": "The 64k/64k transformer on the macro tokenizer with embedding initialisation std 0.02; no final LayerNorm. Paired with base-emb002, it measures how much of the gap the embedding fix removes."
+          "title": "Hierarchical-only 64k, embedding init std 0.02",
+          "description": "Hierarchical-only 64k with embedding initialisation std 0.02; no final LayerNorm. Paired with base-emb002, it measures how much of the gap the embedding fix removes. Local folder gap-hier-64k-emb002 (MLflow gap-sym-emb002)."
         },
         {
           "variant_id": "base-emb002-finalnorm",
-          "title": "Base 8k, embedding std 0.02 + final LayerNorm",
-          "description": "The 8k/8k transformer with both fixes: embedding std 0.02 and a LayerNorm between the last block and the output head."
+          "title": "base-8k, embedding std 0.02 + final LayerNorm",
+          "description": "base-8k with both fixes: embedding std 0.02 and a LayerNorm between the last block and the output head. Local folder gap-base-8k-emb002-finalnorm (MLflow gap-base-emb002-finalnorm)."
         },
         {
           "variant_id": "sym-emb002-finalnorm",
-          "title": "Symmetric 64k, embedding std 0.02 + final LayerNorm",
-          "description": "The 64k/64k transformer on the macro tokenizer with both fixes. Paired with base-emb002-finalnorm, it gives the gap that remains once both faults are fixed (0.085 BPB)."
+          "title": "Hierarchical-only 64k, embedding std 0.02 + final LayerNorm",
+          "description": "Hierarchical-only 64k with both fixes. Paired with base-emb002-finalnorm, it gives the gap that remains once both faults are fixed (0.085 BPB). Local folder gap-hier-64k-emb002-finalnorm (MLflow gap-sym-emb002-finalnorm)."
         },
         {
           "variant_id": "sym-emb002-finalnorm-b32",
-          "title": "Symmetric 64k, embedding std 0.02 + final LayerNorm, batch 32",
-          "description": "As sym-emb002-finalnorm, but with batch 32 instead of 64 sequences, so it takes 1,782 optimizer steps instead of 891 over the same text. Tests whether the 64k model trails because it takes fewer steps. Added after the study was created."
+          "title": "Hierarchical-only 64k, embedding std 0.02 + final LayerNorm, batch 32",
+          "description": "As sym-emb002-finalnorm, but with batch 32 instead of 64 sequences, so it takes 1,782 optimizer steps instead of 891 over the same text. Tests whether the 64k model trails because it takes fewer steps. Added after the study was created. Local folder gap-hier-64k-emb002-finalnorm-b32 (MLflow gap-sym-emb002-finalnorm-b32)."
         },
         {
           "variant_id": "bpe64k-emb002-finalnorm",
-          "title": "64k/64k on a standard BPE, embedding std 0.02 + final LayerNorm",
-          "description": "A 64k/64k transformer with both fixes on a standard word-pretokenized byte-level BPE (65,536 tokens, same trainer and pre-tokenizer as the 8k), instead of the cross-word macro tokenizer; budgets calibrated to the same text (1,186 steps). Separates the cost of a 64k vocabulary from the cost of the macro tokenizer. Added after the study was created."
+          "title": "base-64k (standard 64k BPE), embedding std 0.02 + final LayerNorm",
+          "description": "base-64k: a 64k transformer with both fixes on a standard word-pretokenized byte-level BPE (65,536 tokens, same trainer and pre-tokenizer as the 8k), instead of the cross-word hierarchical tokenizer; budgets calibrated to the same text (1,186 steps). Separates the cost of a 64k vocabulary from the cost of the hierarchical tokenizer. Added after the study was created. Local folder gap-base-64k-emb002-finalnorm (MLflow gap-bpe64k-emb002-finalnorm)."
         }
       ],
       "baseline_variant": "base-default",
@@ -244,19 +244,19 @@
           "goal": "min"
         }
       ],
-      "protocol": "Code: commit 72b1efb plus the uncommitted opt-in switches in data/ak/configs/gap/code.diff (final_norm, embedding_init_std; both off by default). Models: configs/base.json / symmetric.json (d=512, 12 layers, SwiGLU 1024, untied). Training: lr-sweep-38m protocol (configs sweep-{0.001,0.003}-mb16.json): 50M FineWeb-Edu base tokens, batch 64x512 positions, minibatch 16, Muon 0.02, warmup 50, wd 0.01, BF16 + compile, seed 1337, one seed. Validation once at the end on 262,144 held-out base tokens. Compare validation/bits_per_byte; the gap = sym - base for the same treatment. Exceptions: sym-emb002-finalnorm-b32 uses batch 32 (1,782 steps); bpe64k-emb002-finalnorm uses the standard 64k BPE tokenizer with budgets calibrated to the same text (38,849,560 training and 203,610 validation tokens of its own, 1,186 steps; validation covered 971,133 bytes against 971,115 for the 8k/8k). Jobs ran concurrently (up to four at a time), so throughput is not comparable across runs.",
+      "protocol": "Code: commit 72b1efb plus the uncommitted opt-in switches in data/ak/configs/gap/code.diff (final_norm, embedding_init_std; both off by default). Models: configs model-8k.json / model-64k.json (d=512, 12 layers, SwiGLU 1024, untied). Training: lr-sweep-38m protocol (configs sweep-{0.001,0.003}-mb16.json): 50M FineWeb-Edu base tokens, batch 64x512 positions, minibatch 16, Muon 0.02, warmup 50, wd 0.01, BF16 + compile, seed 1337, one seed. Validation once at the end on 262,144 held-out base tokens. Compare validation/bits_per_byte; the gap = Hierarchical-only 64k - base-8k for the same treatment. Exceptions: sym-emb002-finalnorm-b32 uses batch 32 (1,782 steps); bpe64k-emb002-finalnorm (base-64k) uses the standard 64k BPE tokenizer with budgets calibrated to the same text (38,849,560 training and 203,610 validation tokens of its own, 1,186 steps; validation covered 971,133 bytes against 971,115 for base-8k). Jobs ran concurrently (up to four at a time), so throughput is not comparable across runs. MLflow run names keep the old names (gap-base-*, gap-sym-*, gap-bpe64k-*); local folders are gap-base-8k-*, gap-hier-64k-*, gap-base-64k-*.",
       "created_at": "2026-11-11T04:36:33.204Z",
-      "updated_at": "2026-11-11T07:34:30.438Z",
+      "updated_at": "2026-11-15T23:25:51.508Z",
       "created_by": {
         "kind": "agent",
         "id": "9ea139d6f718b0e8"
       },
       "updated_by": {
         "kind": "agent",
-        "id": "ad3b2040fd9751d0"
+        "id": "57f0e844def93532"
       },
-      "revision": 3,
-      "body": "## Why this comparison\n\nIn the 100M pilot and the 38M learning-rate sweep, the 64k/64k transformer on the macro tokenizer trailed the 8k/8k transformer by a wide margin (0.152 BPB at 38M, 0.064 at 100M). A code audit of both training paths found no bug in the loss, masking, packing, schedule or evaluation, but two non-standard choices that could weigh more on a 64k vocabulary: untied input embeddings left at PyTorch's N(0,1) initialisation, and no final LayerNorm before the output head. This study adds each fix to both models and measures how the gap moves, then runs two controls: more optimizer steps for the 64k model, and a 64k vocabulary built by a standard tokenizer.\n\nBits per byte (BPB) is the summed negative log-likelihood of the held-out targets, in bits, divided by the UTF-8 bytes those targets cover:\n\n$$\n\\mathrm{BPB} = \\frac{1}{B \\ln 2} \\sum_{t} -\\ln p(x_t \\mid x_{<t})\n$$\n\nwhere $B$ is the number of bytes scored. Unlike a per-token loss it does not depend on the tokenizer, so it compares models with 8k and 64k vocabularies directly. Lower is better.\n\nThe quantity tracked is the gap for the same treatment,\n\n$$\n\\Delta = \\mathrm{BPB}_{64\\text{k}} - \\mathrm{BPB}_{8\\text{k}}\n$$\n\n## Variants\n\nAll runs: 38M dense parameters (d = 512, 12 layers, SwiGLU 1024, untied embeddings), 50M FineWeb-Edu base tokens of text, AdamW 1e-3 for the 8k/8k and 3e-3 for the 64k models (the best rates of the earlier sweep), Muon 0.02, seed 1337.\n\n| Variant | Model | Embedding init | Final LayerNorm | Batch (steps) | BPB |\n| --- | --- | --- | --- | --- | ---: |\n| base-default (baseline) | 8k/8k transformer | N(0,1) | no | 64 (1,526) | 1.4087 |\n| sym-default | 64k/64k, macro tokenizer | N(0,1) | no | 64 (891) | 1.5609 |\n| base-emb002 | 8k/8k transformer | std 0.02 | no | 64 (1,526) | 1.4077 |\n| sym-emb002 | 64k/64k, macro tokenizer | std 0.02 | no | 64 (891) | 1.5180 |\n| base-emb002-finalnorm | 8k/8k transformer | std 0.02 | yes | 64 (1,526) | 1.4139 |\n| sym-emb002-finalnorm | 64k/64k, macro tokenizer | std 0.02 | yes | 64 (891) | 1.4990 |\n| sym-emb002-finalnorm-b32 | 64k/64k, macro tokenizer | std 0.02 | yes | 32 (1,782) | 1.4996 |\n| bpe64k-emb002-finalnorm | 64k/64k, standard BPE | std 0.02 | yes | 64 (1,186) | 1.4045 |\n\nThe gap for each treatment: 0.152 with neither fix, 0.110 with the embedding fix, 0.085 with both, 0.086 with both at batch 32, and −0.009 for the standard 64k BPE with both.\n\nA \"final LayerNorm only\" variant was planned but never run and has been removed from the list, so the final norm's effect without the embedding fix is not measured.\n\n## Reading the result\n\n- One seed per variant. Differences under about 0.01 BPB, such as the 8k/8k with and without the final norm (+0.006) or the standard 64k BPE against the 8k/8k (−0.009), are not resolved.\n- The two original-settings runs repeat two imported sweep runs with the same seed and configuration on a later commit (with the new switches off): 1.4087 against 1.4087 for the 8k/8k and 1.5609 against 1.5602 for the 64k/64k. That shows the opt-in code changes did not alter default training; it is not an estimate of seed noise.\n- The standard 64k BPE was trained on the same FineWeb-Edu slice as the macro tokenizer, while the 8k tokenizer was trained on a broader mix (BabyLM, Cosmopedia and FineWeb-Edu), so the 64k BPE is more in-domain. Its budgets count its own tokens and were calibrated to cover the same text.\n- Jobs ran up to four at a time on the same machine, so `tokens_per_second` is not comparable across runs.\n- The full reading, with the attribution of the gap, is in the gap audit's final report."
+      "revision": 4,
+      "body": "## Why this comparison\n\nIn the 100M pilot and the 38M learning-rate sweep, Hierarchical-only 64k (the 64k transformer on the hierarchical tokenizer) trailed base-8k by a wide margin (0.152 BPB at 38M, 0.064 at 100M). A code audit of both training paths found no bug in the loss, masking, packing, schedule or evaluation, but two non-standard choices that could weigh more on a 64k vocabulary: untied input embeddings left at PyTorch's N(0,1) initialisation, and no final LayerNorm before the output head. This study adds each fix to both models and measures how the gap moves, then runs two controls: more optimizer steps for the 64k model, and a 64k vocabulary built by a standard tokenizer (base-64k).\n\nBits per byte (BPB) is the summed negative log-likelihood of the held-out targets, in bits, divided by the UTF-8 bytes those targets cover:\n\n$$\n\\mathrm{BPB} = \\frac{1}{B \\ln 2} \\sum_{t} -\\ln p(x_t \\mid x_{<t})\n$$\n\nwhere $B$ is the number of bytes scored. Unlike a per-token loss it does not depend on the tokenizer, so it compares models with 8k and 64k vocabularies directly. Lower is better.\n\nThe quantity tracked is the gap for the same treatment,\n\n$$\n\\Delta = \\mathrm{BPB}_{64\\text{k}} - \\mathrm{BPB}_{8\\text{k}}\n$$\n\n## Variants\n\nAll runs: 38M dense parameters (d = 512, 12 layers, SwiGLU 1024, untied embeddings), 50M FineWeb-Edu base tokens of text, AdamW 1e-3 for base-8k and 3e-3 for the 64k models (the best rates of the earlier sweep), Muon 0.02, seed 1337.\n\n| Variant | Model | Embedding init | Final LayerNorm | Batch (steps) | BPB |\n| --- | --- | --- | --- | --- | ---: |\n| base-default (baseline) | base-8k | N(0,1) | no | 64 (1,526) | 1.4087 |\n| sym-default | Hierarchical-only 64k | N(0,1) | no | 64 (891) | 1.5609 |\n| base-emb002 | base-8k | std 0.02 | no | 64 (1,526) | 1.4077 |\n| sym-emb002 | Hierarchical-only 64k | std 0.02 | no | 64 (891) | 1.5180 |\n| base-emb002-finalnorm | base-8k | std 0.02 | yes | 64 (1,526) | 1.4139 |\n| sym-emb002-finalnorm | Hierarchical-only 64k | std 0.02 | yes | 64 (891) | 1.4990 |\n| sym-emb002-finalnorm-b32 | Hierarchical-only 64k | std 0.02 | yes | 32 (1,782) | 1.4996 |\n| bpe64k-emb002-finalnorm | base-64k (standard BPE) | std 0.02 | yes | 64 (1,186) | 1.4045 |\n\nThe gap for each treatment: 0.152 with neither fix, 0.110 with the embedding fix, 0.085 with both, 0.086 with both at batch 32, and −0.009 for base-64k with both.\n\nA \"final LayerNorm only\" variant was planned but never run and has been removed from the list, so the final norm's effect without the embedding fix is not measured.\n\n## Reading the result\n\n- One seed per variant. Differences under about 0.01 BPB, such as base-8k with and without the final norm (+0.006) or base-64k against base-8k (−0.009), are not resolved.\n- The two original-settings runs repeat two imported sweep runs with the same seed and configuration on a later commit (with the new switches off): 1.4087 against 1.4087 for base-8k and 1.5609 against 1.5602 for Hierarchical-only 64k. That shows the opt-in code changes did not alter default training; it is not an estimate of seed noise.\n- base-64k's BPE was trained on the same FineWeb-Edu slice as the hierarchical tokenizer, while the 8k tokenizer was trained on a broader mix (BabyLM, Cosmopedia and FineWeb-Edu), so the 64k BPE is more in-domain. Its budgets count its own tokens and were calibrated to cover the same text.\n- Jobs ran up to four at a time on the same machine, so `tokens_per_second` is not comparable across runs.\n- The full reading, with the attribution of the gap, is in the gap audit's final report."
     }
   ]
 }

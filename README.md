@@ -3,9 +3,12 @@
 Fraise explores language models with a large macro input vocabulary and a smaller
 base output vocabulary, as described in [PoC.md](PoC.md). Implemented stages:
 
-1. 8k/8k baseline: the `transformer` architecture with a byte-level BPE tokenizer.
-2. 64k/64k symmetric baseline: the same `transformer` with a macro tokenizer.
-3. Static 64k-input / 8k-output Fraise: the `fraise` architecture.
+1. Baselines `base-8k` and `base-64k`: the `transformer` architecture with an 8k or a
+   64k byte-level BPE tokenizer.
+2. Hierarchical-only 64k (`hier-64k`): the same `transformer` with the 64k hierarchical
+   (macro) tokenizer and an independent embedding row per macro.
+3. Fraise 64/8 (`fraise-64-8`): the `fraise` architecture, compositional 64k macro input
+   and 8k base-token output.
 4. Compositional macro embeddings (`macro_embedding`, ablatable to `independent`).
 5. Learned 32-dimensional macro residuals (`macro_residual_dim`; 0 disables them).
 6. Trie-based autoregressive bridging between the global and local decoders.
@@ -490,7 +493,7 @@ followed by `local_num_layers` SwiGLU blocks of width `local_dim`. Every slot
 depends only on its own context and prefix, so training evaluates all real slots
 in one batch. A macro's loss is the summed cross-entropy of its base tokens and
 END, so training and validation losses are negative log-likelihoods per macro,
-directly comparable to the symmetric 64k baseline on the same tokenizer.
+directly comparable to Hierarchical-only 64k (`hier-64k`) on the same tokenizer.
 
 Generation walks a trie of macro decompositions. Each base token is sampled from
 the children of the current trie node, plus END when the path already spells a

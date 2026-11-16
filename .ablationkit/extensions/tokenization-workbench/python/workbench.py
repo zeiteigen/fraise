@@ -23,9 +23,9 @@ from fraise.workbench.tokenization import TokenizationWorkbench
 
 # The PoC pilot's three variants, each with the hierarchy its own run was trained with.
 DEFAULT_CONFIGURATIONS = [
-    {"label": "8k/8k BPE (pilot-bpe8k)", "hierarchy": {"kind": "run", "run": {"run_id": "pilot-bpe8k"}}},
-    {"label": "64k/64k macro (pilot-macro64k)", "hierarchy": {"kind": "run", "run": {"run_id": "pilot-macro64k"}}},
-    {"label": "Fraise macro-64k in / 8k out (pilot-fraise)", "hierarchy": {"kind": "run", "run": {"run_id": "pilot-fraise"}}},
+    {"label": "base-8k (pilot-base-8k)", "hierarchy": {"kind": "run", "run": {"run_id": "pilot-base-8k"}}},
+    {"label": "Hierarchical-only 64k (pilot-hier-64k)", "hierarchy": {"kind": "run", "run": {"run_id": "pilot-hier-64k"}}},
+    {"label": "Fraise 64/8 (pilot-fraise-64-8)", "hierarchy": {"kind": "run", "run": {"run_id": "pilot-fraise-64-8"}}},
 ]
 
 
