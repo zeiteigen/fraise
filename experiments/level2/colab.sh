@@ -14,6 +14,36 @@
 # Writes experiments/level2/out/: events.jsonl (training metrics, then the tokenizer's tok/*
 # measurements), training.log, model_meta.json, tokenizer.json and tokstats.json.
 set -euo pipefail
+
+# Hand the console to the job's collector in whole lines only. The AblationKit remote worker
+# re-reads an unterminated last line on every poll, and a progress bar that redraws with "\r"
+# for longer than one poll makes that re-read grow until the worker crashes (it did on the first
+# unattended Colab run). So: no progress bars, "\r" becomes a newline, and nothing reaches the
+# console until its line is complete.
+if [ -z "${L2_LINE_FILTERED:-}" ]; then
+  export L2_LINE_FILTERED=1
+  set +e
+  bash "$0" "$@" 2>&1 | python3 -u -c '
+import sys
+src, out, buf = sys.stdin.buffer.raw, sys.stdout.buffer, b""
+while True:
+    chunk = src.read(65536)
+    if not chunk:
+        break
+    buf += chunk.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    end = buf.rfind(b"\n")
+    if end >= 0:
+        out.write(buf[: end + 1])
+        out.flush()
+        buf = buf[end + 1 :]
+if buf:
+    out.write(buf + b"\n")
+    out.flush()
+'
+  exit "${PIPESTATUS[0]}"
+fi
+export TQDM_DISABLE=1 HF_DATASETS_DISABLE_PROGRESS_BARS=1 PYTHONUNBUFFERED=1
+
 VARIANT=$1
 ARCH=${VARIANT%%-*}
 TOK=${VARIANT#*-}
