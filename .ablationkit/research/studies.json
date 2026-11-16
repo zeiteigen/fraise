@@ -270,9 +270,9 @@
           "id": "task-20261116-2y79c4"
         }
       ],
-      "status": "running",
+      "status": "complete",
       "title": "Which level-2 (64k) tokenizer closes the hierarchical tokenizer's gap at 38M?",
-      "summary": "Trains the 38M Hierarchical-only 64k transformer with both fixes on five level-2 tokenizers built over the same 8k base tokens and the same 0.3 GB of FineWeb-Edu: the current cross-word hierarchical BPE (rerun as baseline), word-bounded BPE, a SuperBPE-style curriculum, and greedy longest-match over prefix-closed vocabularies, cross-word and word-bounded. Each is read against BPB and against how many global positions it needs per base token.",
+      "summary": "Compared four level-2 (64k) tokenizers over the same 8k base tokens and text, all keeping cross-word macros, on Hierarchical-only 64k with both fixes at 38M, and three of them on Fraise 64/8. The whole-word-phrase curriculum (word-bounded BPE to 40,000 entries, then cross-word merges of whole words only) was best: 1.4635 / 1.4711 BPB at seeds 1337 / 2 against 1.4983 / 1.4983 for the current tokenizer, at the same compression. It also improved Fraise 64/8 from 1.5401 to 1.5226 (one seed). The unrestricted curriculum came close (1.4753, one seed; within seed noise of the winner). The greedy prefix-closed vocabulary, which removes boundary lookahead, was worse for both models (1.5253 and 1.5481). Seed noise reached 0.008 BPB.",
       "baseline_variant": "hier-current",
       "metric_goals": [
         {
@@ -280,7 +280,7 @@
           "goal": "min"
         }
       ],
-      "protocol": "As the gap audit's runs with both fixes (`data/ak/configs/gap/hier-64k-lr3e-3-emb002.json`, `model-64k-finalnorm.json`): 38M dense transformer (12 layers, d 512, untied 64k embedding and head), input embeddings std 0.02, final LayerNorm, Muon 0.02 / AdamW 3e-3, batch 64 (minibatch 16), 50M base tokens of FineWeb-Edu in one shuffled pass (the same text for every tokenizer, because budgets count base tokens), validated once at the end on 262,144 base tokens of the held-out prefix. One seed (1337). Only the tokenizer file changes; every tokenizer has 65,536 entries, at most 8 base tokens each, and is trained on the same 0.3 GB FineWeb-Edu slice as hierarchical-64k. Each tokenizer's compression and structure are measured by a `tokstats-*` run (`data/ak/analysis/tokenizer_stats.py`). Reference runs outside the study: base-8k (gap-base-emb002-finalnorm), base-64k (gap-bpe64k-emb002-finalnorm). Known confounds: one seed; AdamW 3e-3 not re-tuned per tokenizer; models with fewer positions per byte spend fewer FLOPs on the same text.",
+      "protocol": "Hierarchical-only 64k variants: the gap audit's runs with both fixes (`experiments/level2/configs/hier-64k-lr3e-3-emb002.json`, `model-64k-finalnorm.json`): 38M dense transformer (12 layers, d 512, untied 64k embedding and head), input embeddings std 0.02, final LayerNorm, Muon 0.02 / AdamW 3e-3, batch 64 (minibatch 16), 50M base tokens of FineWeb-Edu in one pass (the same text for every tokenizer, because budgets count base tokens), validated once at the end on 262,144 base tokens of the held-out prefix. Fraise 64/8 variants: the 38M sweep's best settings (`model-fraise-38m.json`, `fraise-lr3e-3.json`: AdamW 3e-3, minibatch 16, no fixes, which Fraise does not support). Seed 1337; the `-s2` variants use seed 2 (`SEED=2`), which varies initialisation only (one data source, so document order is fixed). Only the tokenizer changes; every tokenizer has 65,536 entries of at most 8 base tokens and is learned from the same 0.3 GB FineWeb-Edu slice as hierarchical-64k. hier-current and hier-greedy-cross ran on the workstation; the rest ran unattended on Colab L4s (BF16) through `experiments/level2/colab.sh` at commits ff3eb42 and 4b208a7 of branch `level2-tokenizers`, which also measures each tokenizer (`tok/*` metrics). Two Colab runs (hier-phrases40k, fraise-phrases40k) lost their final archive after validation had been collected. References outside the study: base-8k (gap-base-emb002-finalnorm), base-64k (gap-bpe64k-emb002-finalnorm). Known confounds: AdamW 3e-3 not re-tuned per tokenizer; GPU type differs between workstation and Colab; Fraise lacks the two fixes; fewer positions per byte also means fewer FLOPs (all four tokenizers compress within 2%).",
       "variants": [
         {
           "variant_id": "hier-current",
@@ -288,37 +288,72 @@
           "description": "The current cross-word hierarchical BPE, rerun at the current commit so the study's baseline shares its code with the other variants; should reproduce gap-hier-64k-emb002-finalnorm (MLflow gap-sym-emb002-finalnorm)."
         },
         {
-          "variant_id": "hier-wordbpe",
-          "title": "Word-bounded hierarchical BPE",
-          "description": "Same second-level BPE over base IDs, but no merge crosses a base pre-token (word) boundary. Tests whether removing cross-word macros alone closes the gap."
-        },
-        {
-          "variant_id": "hier-curriculum",
-          "title": "SuperBPE-style curriculum (90% word-bounded)",
-          "description": "Word-bounded merges until 90% of the vocabulary (58,982 entries), then cross-word merges over those tokens. Tests whether a few late superword macros keep compression without the cost."
-        },
-        {
           "variant_id": "hier-greedy-cross",
           "title": "Greedy longest match, prefix-closed, cross-word",
           "description": "Every entry appends one base token to another entry; segmentation is longest match left to right, so a boundary depends only on the next base token. Tests whether removing lookahead alone, keeping cross-word macros, closes the gap."
         },
         {
+          "variant_id": "hier-curriculum40k",
+          "title": "Curriculum: whole-word pieces to 40,000 entries, then cross-word",
+          "description": "Word-bounded BPE to 40,000 entries, then 25,536 free cross-word merges over those tokens (SuperBPE's recipe with an earlier transition, so about as many multi-word entries as the current tokenizer). Cross-word macros may still start or end inside a word."
+        },
+        {
+          "variant_id": "hier-phrases40k",
+          "title": "Curriculum restricted to whole-word phrases",
+          "description": "As hier-curriculum40k, but cross-word merges only join tokens that are whole words, so no macro starts or ends inside a word (BoundlessBPE's restriction). Against hier-curriculum40k it isolates the cost of word fragments in cross-word macros; against hier-current, of the whole recipe."
+        },
+        {
+          "variant_id": "fraise-current",
+          "title": "Fraise 64/8 on hierarchical-64k (rerun)",
+          "description": "Fraise 64/8 at the sweep's best settings (AdamW 3e-3, batch 64, minibatch 16, no fixes), rerun at the current commit as the Fraise baseline (imported sweep run: sweep-fraise-0.003)."
+        },
+        {
+          "variant_id": "fraise-greedy-cross",
+          "title": "Fraise 64/8 on the greedy cross-word tokenizer",
+          "description": "Same as fraise-current with the prefix-closed greedy tokenizer: its END decisions depend only on the next base token. Tests whether lookahead, which did not matter for Hierarchical-only 64k, matters for Fraise's local decoder."
+        },
+        {
+          "variant_id": "hier-wordbpe",
+          "title": "Word-bounded hierarchical BPE (not run)",
+          "description": "Declared at first, then dropped: macros are meant to cross words. The tokenizer exists (experiments/level2/tokenizers/wordbpe-64k.json); base-64k remains the word-bounded reference."
+        },
+        {
           "variant_id": "hier-greedy-words",
-          "title": "Greedy longest match, prefix-closed, word-bounded",
-          "description": "As hier-greedy-cross, but a macro never extends across a word start: removes both cross-word macros and lookahead."
+          "title": "Greedy word-bounded (not run)",
+          "description": "Dropped for the same reason as hier-wordbpe."
+        },
+        {
+          "variant_id": "hier-curriculum",
+          "title": "Curriculum at 90% (not run)",
+          "description": "Replaced by hier-curriculum40k: at a 90% transition only 6.5k merges cross words, far fewer multi-word macros than the current tokenizer."
+        },
+        {
+          "variant_id": "hier-phrases40k-s2",
+          "title": "Curriculum restricted to whole-word phrases, seed 2",
+          "description": "hier-phrases40k with seed 2: replicates the study's best tokenizer against hier-current-s2. The tokenizer is retrained in the job from the same text by the same deterministic procedure."
+        },
+        {
+          "variant_id": "fraise-phrases40k",
+          "title": "Fraise 64/8 on the whole-word-phrase curriculum",
+          "description": "fraise-current with the study's best tokenizer for Hierarchical-only 64k (word-bounded BPE to 40,000 entries, then cross-word merges between whole words only), trained in the job. Tests whether that tokenizer's gain carries over to Fraise, the model the tokenizer is for."
+        },
+        {
+          "variant_id": "hier-current-s2",
+          "title": "Hierarchical-only 64k on hierarchical-64k, seed 2",
+          "description": "hier-current with seed 2 instead of 1337, which varies initialisation only (one data source, so the document order is fixed). With hier-current it gives the project's first estimate of seed-to-seed noise at 38M, needed to read the 0.01–0.03 BPB differences between tokenizers."
         }
       ],
       "created_at": "2026-11-16T06:30:51.394Z",
-      "updated_at": "2026-11-16T06:30:51.394Z",
+      "updated_at": "2026-11-16T10:43:01.391Z",
       "created_by": {
         "kind": "agent",
         "id": "b4bc3eb5decad850"
       },
       "updated_by": {
         "kind": "agent",
-        "id": "b4bc3eb5decad850"
+        "id": "843554f66257a70c"
       },
-      "revision": 1
+      "revision": 6
     }
   ]
 }
