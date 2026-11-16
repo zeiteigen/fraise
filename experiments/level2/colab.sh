@@ -8,6 +8,7 @@
 # TOKENIZER: current | greedy-cross | wordbpe   (committed under tokenizers/)
 #            curriculum40k | phrases40k | curriculum | greedy-words
 #                                               (trained here, on the same 0.3 GB of FineWeb-Edu)
+# SEED (environment, optional): another training seed than the config's 1337.
 # REFS (environment, optional): committed tokenizers to measure as well, e.g. "hierarchical-64k",
 # logged under ref-<name>/ in the same run.
 #
@@ -88,6 +89,13 @@ case $ARCH in
   fraise) MODEL=$HERE/configs/model-fraise-38m.json; HP=$HERE/configs/fraise-lr3e-3.json ;;
   *) echo "unknown architecture $ARCH" >&2; exit 2 ;;
 esac
+# SEED (environment, optional): train with another seed than the config's 1337 (init and data order).
+if [ -n "${SEED:-}" ]; then
+  python3 -c 'import json, sys; c = json.load(open(sys.argv[1])); c["seed"] = int(sys.argv[2]); json.dump(c, open(sys.argv[3], "w"), indent=2)' \
+    "$HP" "$SEED" "$OUT/hyperparameters.json"
+  HP=$OUT/hyperparameters.json
+  echo "seed $SEED"
+fi
 
 echo "== train $VARIANT $(date -u +%T)"
 uv run --frozen train --data-dir "$D" --save-path "$OUT/runs" --training-hyperparameters "$HP" \
