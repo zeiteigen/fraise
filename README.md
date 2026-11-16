@@ -20,6 +20,8 @@ remain experiment stages. See [Asymmetric Fraise](#asymmetric-fraise-macro-in-ba
 
 ## Model workspace (AblationKit)
 
+Note: [AblationKit is a separate project](https://github.com/zeiteigen/ablationkit)
+
 The interactive views run inside [AblationKit](.ablationkit/) as project panels, through
 fraise's own code in `fraise.workbench` (the project environment, at the checkout's current
 commit; commit changes to `fraise.workbench` before rebuilding an extension):
@@ -110,7 +112,7 @@ entries for the byte alphabet and special tokens.
 
 ## Create a macro tokenizer
 
-A macro tokenizer learns merges over the *IDs* of an existing base tokenizer, so
+A macro tokenizer learns merges over the _IDs_ of an existing base tokenizer, so
 every macro has one deterministic decomposition into base tokens:
 
 ```sh
@@ -588,13 +590,13 @@ residuals use AdamW with weight decay like the two-level residual table.
 
 **Hierarchy file format** (`fraise.hierarchy.EmbeddingHierarchy`, `.npz` or `.json`):
 
-| Field | Shape | Meaning |
-|---|---|---|
-| `level_sizes` | `[L]` | Cumulative nested node counts; `level_sizes[0]` is the base vocabulary. |
-| `compositions_l` (npz) / `compositions[l-1]` (json) | `[new_l, K_l]` | Ordered children (nodes `< level_sizes[l-1]`) of each new node `level_sizes[l-1] + i`; `-1` pads rows (json: ragged lists). |
-| `residual_widths` | `[level_sizes[-1]]` | One width per node, `>= 0`; owned by the introducing level (atoms by level 1). |
-| `input_nodes` | `[input_vocab]`, optional | Node of each input token; omit for the identity. Lets intermediate nodes be tokens the input tokenizer never emits. |
-| `header` (npz) | JSON | `format: "fraise-embedding-hierarchy"`, `format_version: 1`, `level_sizes`, optional `level_names` and `metadata`. |
+| Field                                               | Shape                     | Meaning                                                                                                                     |
+| --------------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `level_sizes`                                       | `[L]`                     | Cumulative nested node counts; `level_sizes[0]` is the base vocabulary.                                                     |
+| `compositions_l` (npz) / `compositions[l-1]` (json) | `[new_l, K_l]`            | Ordered children (nodes `< level_sizes[l-1]`) of each new node `level_sizes[l-1] + i`; `-1` pads rows (json: ragged lists). |
+| `residual_widths`                                   | `[level_sizes[-1]]`       | One width per node, `>= 0`; owned by the introducing level (atoms by level 1).                                              |
+| `input_nodes`                                       | `[input_vocab]`, optional | Node of each input token; omit for the identity. Lets intermediate nodes be tokens the input tokenizer never emits.         |
+| `header` (npz)                                      | JSON                      | `format: "fraise-embedding-hierarchy"`, `format_version: 1`, `level_sizes`, optional `level_names` and `metadata`.          |
 
 `EmbeddingHierarchy(level_sizes, compositions, residual_widths, input_nodes).save(path)`
 validates and writes either format and returns the sha256; `config_levels()`
@@ -644,3 +646,7 @@ Small modules own their concrete behavior; package initializers stay lightweight
 ```sh
 uv run python -m unittest discover -s tests -v
 ```
+
+## License
+
+Fraise is released under the [MIT License](LICENSE).

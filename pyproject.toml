@@ -3,6 +3,8 @@ name = "fraise"
 version = "0.1.0"
 description = "Hierarchical tokenizer for LLMs experiment"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Shahzad", email = "code@alishahzad.dev" }
 ]

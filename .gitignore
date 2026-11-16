@@ -1,6 +1,6 @@
 
 /data/
-/docs/
+/docs/article/
 
 # Python-generated files
 __pycache__/
@@ -12,3 +12,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Tool caches and local settings
+.pytest_cache/
+.ruff_cache/
+.claude/settings.local.json

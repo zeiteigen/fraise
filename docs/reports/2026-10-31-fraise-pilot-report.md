@@ -677,8 +677,8 @@ normalized), tokenizer checksums and execution provenance for every run are in
   keeps document order. `shuffle_data: true` would randomly interleave packed windows
   *across sources*; with a single active source it has no effect. Validation is 262,144 base tokens of the
   held-out prefix.
-- **Experiment directory.** `data/experiments/poc-fineweb/` (relative to the main
-  checkout, `/home/munch/Projects/fraise`):
+- **Experiment directory.** `data/experiments/poc-fineweb/` (relative to the repository
+  root; not included in the repository):
   - `configs/`, `logs/`, `models/`.
   - `raw/` is a symlink to the shared `data/raw/`.
   - Sweep runs: `sweep-{base,symmetric,fraise}-{0.003,0.001,0.0003}`.
