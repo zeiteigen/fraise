@@ -257,6 +257,68 @@
       },
       "revision": 4,
       "body": "## Why this comparison\n\nIn the 100M pilot and the 38M learning-rate sweep, Hierarchical-only 64k (the 64k transformer on the hierarchical tokenizer) trailed base-8k by a wide margin (0.152 BPB at 38M, 0.064 at 100M). A code audit of both training paths found no bug in the loss, masking, packing, schedule or evaluation, but two non-standard choices that could weigh more on a 64k vocabulary: untied input embeddings left at PyTorch's N(0,1) initialisation, and no final LayerNorm before the output head. This study adds each fix to both models and measures how the gap moves, then runs two controls: more optimizer steps for the 64k model, and a 64k vocabulary built by a standard tokenizer (base-64k).\n\nBits per byte (BPB) is the summed negative log-likelihood of the held-out targets, in bits, divided by the UTF-8 bytes those targets cover:\n\n$$\n\\mathrm{BPB} = \\frac{1}{B \\ln 2} \\sum_{t} -\\ln p(x_t \\mid x_{<t})\n$$\n\nwhere $B$ is the number of bytes scored. Unlike a per-token loss it does not depend on the tokenizer, so it compares models with 8k and 64k vocabularies directly. Lower is better.\n\nThe quantity tracked is the gap for the same treatment,\n\n$$\n\\Delta = \\mathrm{BPB}_{64\\text{k}} - \\mathrm{BPB}_{8\\text{k}}\n$$\n\n## Variants\n\nAll runs: 38M dense parameters (d = 512, 12 layers, SwiGLU 1024, untied embeddings), 50M FineWeb-Edu base tokens of text, AdamW 1e-3 for base-8k and 3e-3 for the 64k models (the best rates of the earlier sweep), Muon 0.02, seed 1337.\n\n| Variant | Model | Embedding init | Final LayerNorm | Batch (steps) | BPB |\n| --- | --- | --- | --- | --- | ---: |\n| base-default (baseline) | base-8k | N(0,1) | no | 64 (1,526) | 1.4087 |\n| sym-default | Hierarchical-only 64k | N(0,1) | no | 64 (891) | 1.5609 |\n| base-emb002 | base-8k | std 0.02 | no | 64 (1,526) | 1.4077 |\n| sym-emb002 | Hierarchical-only 64k | std 0.02 | no | 64 (891) | 1.5180 |\n| base-emb002-finalnorm | base-8k | std 0.02 | yes | 64 (1,526) | 1.4139 |\n| sym-emb002-finalnorm | Hierarchical-only 64k | std 0.02 | yes | 64 (891) | 1.4990 |\n| sym-emb002-finalnorm-b32 | Hierarchical-only 64k | std 0.02 | yes | 32 (1,782) | 1.4996 |\n| bpe64k-emb002-finalnorm | base-64k (standard BPE) | std 0.02 | yes | 64 (1,186) | 1.4045 |\n\nThe gap for each treatment: 0.152 with neither fix, 0.110 with the embedding fix, 0.085 with both, 0.086 with both at batch 32, and −0.009 for base-64k with both.\n\nA \"final LayerNorm only\" variant was planned but never run and has been removed from the list, so the final norm's effect without the embedding fix is not measured.\n\n## Reading the result\n\n- One seed per variant. Differences under about 0.01 BPB, such as base-8k with and without the final norm (+0.006) or base-64k against base-8k (−0.009), are not resolved.\n- The two original-settings runs repeat two imported sweep runs with the same seed and configuration on a later commit (with the new switches off): 1.4087 against 1.4087 for base-8k and 1.5609 against 1.5602 for Hierarchical-only 64k. That shows the opt-in code changes did not alter default training; it is not an estimate of seed noise.\n- base-64k's BPE was trained on the same FineWeb-Edu slice as the hierarchical tokenizer, while the 8k tokenizer was trained on a broader mix (BabyLM, Cosmopedia and FineWeb-Edu), so the 64k BPE is more in-domain. Its budgets count its own tokens and were calibrated to cover the same text.\n- Jobs ran up to four at a time on the same machine, so `tokens_per_second` is not comparable across runs.\n- The full reading, with the attribution of the gap, is in the gap audit's final report."
+    },
+    {
+      "schema_version": 1,
+      "record_id": "level2-tokenizers-38m",
+      "project_id": "fraise",
+      "kind": "study",
+      "tags": [],
+      "links": [
+        {
+          "kind": "task",
+          "id": "task-20261116-2y79c4"
+        }
+      ],
+      "status": "running",
+      "title": "Which level-2 (64k) tokenizer closes the hierarchical tokenizer's gap at 38M?",
+      "summary": "Trains the 38M Hierarchical-only 64k transformer with both fixes on five level-2 tokenizers built over the same 8k base tokens and the same 0.3 GB of FineWeb-Edu: the current cross-word hierarchical BPE (rerun as baseline), word-bounded BPE, a SuperBPE-style curriculum, and greedy longest-match over prefix-closed vocabularies, cross-word and word-bounded. Each is read against BPB and against how many global positions it needs per base token.",
+      "baseline_variant": "hier-current",
+      "metric_goals": [
+        {
+          "key": "validation/bits_per_byte",
+          "goal": "min"
+        }
+      ],
+      "protocol": "As the gap audit's runs with both fixes (`data/ak/configs/gap/hier-64k-lr3e-3-emb002.json`, `model-64k-finalnorm.json`): 38M dense transformer (12 layers, d 512, untied 64k embedding and head), input embeddings std 0.02, final LayerNorm, Muon 0.02 / AdamW 3e-3, batch 64 (minibatch 16), 50M base tokens of FineWeb-Edu in one shuffled pass (the same text for every tokenizer, because budgets count base tokens), validated once at the end on 262,144 base tokens of the held-out prefix. One seed (1337). Only the tokenizer file changes; every tokenizer has 65,536 entries, at most 8 base tokens each, and is trained on the same 0.3 GB FineWeb-Edu slice as hierarchical-64k. Each tokenizer's compression and structure are measured by a `tokstats-*` run (`data/ak/analysis/tokenizer_stats.py`). Reference runs outside the study: base-8k (gap-base-emb002-finalnorm), base-64k (gap-bpe64k-emb002-finalnorm). Known confounds: one seed; AdamW 3e-3 not re-tuned per tokenizer; models with fewer positions per byte spend fewer FLOPs on the same text.",
+      "variants": [
+        {
+          "variant_id": "hier-current",
+          "title": "Hierarchical-only 64k on hierarchical-64k (rerun)",
+          "description": "The current cross-word hierarchical BPE, rerun at the current commit so the study's baseline shares its code with the other variants; should reproduce gap-hier-64k-emb002-finalnorm (MLflow gap-sym-emb002-finalnorm)."
+        },
+        {
+          "variant_id": "hier-wordbpe",
+          "title": "Word-bounded hierarchical BPE",
+          "description": "Same second-level BPE over base IDs, but no merge crosses a base pre-token (word) boundary. Tests whether removing cross-word macros alone closes the gap."
+        },
+        {
+          "variant_id": "hier-curriculum",
+          "title": "SuperBPE-style curriculum (90% word-bounded)",
+          "description": "Word-bounded merges until 90% of the vocabulary (58,982 entries), then cross-word merges over those tokens. Tests whether a few late superword macros keep compression without the cost."
+        },
+        {
+          "variant_id": "hier-greedy-cross",
+          "title": "Greedy longest match, prefix-closed, cross-word",
+          "description": "Every entry appends one base token to another entry; segmentation is longest match left to right, so a boundary depends only on the next base token. Tests whether removing lookahead alone, keeping cross-word macros, closes the gap."
+        },
+        {
+          "variant_id": "hier-greedy-words",
+          "title": "Greedy longest match, prefix-closed, word-bounded",
+          "description": "As hier-greedy-cross, but a macro never extends across a word start: removes both cross-word macros and lookahead."
+        }
+      ],
+      "created_at": "2026-11-16T06:30:51.394Z",
+      "updated_at": "2026-11-16T06:30:51.394Z",
+      "created_by": {
+        "kind": "agent",
+        "id": "b4bc3eb5decad850"
+      },
+      "updated_by": {
+        "kind": "agent",
+        "id": "b4bc3eb5decad850"
+      },
+      "revision": 1
     }
   ]
 }
