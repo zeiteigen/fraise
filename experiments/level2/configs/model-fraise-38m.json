@@ -1,0 +1,18 @@
+{
+  "architecture": "fraise",
+  "vocab_size": 65536,
+  "base_vocab_size": 8192,
+  "max_macro_length": 8,
+  "residual_stream_dim": 512,
+  "head_dim": 64,
+  "qk_dim": 64,
+  "num_heads": 12,
+  "swiglu_up_dim": 1024,
+  "num_layers": 12,
+  "max_seq_len": 512,
+  "macro_embedding": "compositional",
+  "macro_residual_dim": 32,
+  "local_dim": 512,
+  "local_num_layers": 2,
+  "local_swiglu_up_dim": 1024
+}

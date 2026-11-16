@@ -1,0 +1,13 @@
+{
+  "architecture": "transformer",
+  "vocab_size": 65536,
+  "residual_stream_dim": 512,
+  "head_dim": 64,
+  "qk_dim": 64,
+  "num_heads": 12,
+  "swiglu_up_dim": 1024,
+  "num_layers": 12,
+  "max_seq_len": 512,
+  "tie_word_embeddings": false,
+  "final_norm": true
+}

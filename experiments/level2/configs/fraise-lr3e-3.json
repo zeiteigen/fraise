@@ -1,0 +1,24 @@
+{
+  "batch_size": 64,
+  "minibatch_size": 16,
+  "learning_rate": 0.02,
+  "adamw_learning_rate": 0.003,
+  "weight_decay": 0.01,
+  "sequence_length": 512,
+  "warmup_steps": 50,
+  "max_train_tokens": 50000000,
+  "dataset_token_counts": {
+    "fineweb-edu": 50000000,
+    "cosmopedia-khanacademy": 0,
+    "cosmopedia-stories": 0
+  },
+  "max_validation_tokens": 262144,
+  "validation_timeout_seconds": 3600,
+  "validation_device": "cpu",
+  "use_bf16": true,
+  "use_compile": true,
+  "checkpoint_interval_steps": 100000,
+  "checkpoint_keep_last": 2,
+  "log_interval_steps": 100,
+  "shuffle_data": true
+}
