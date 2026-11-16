@@ -17,6 +17,9 @@ Two segmentations are supported:
 base tokenizer); the rest apply across words. ``word_bounded_merges=0`` is the
 original hierarchical tokenizer; ``len(merges)`` keeps every macro inside a
 word; anything between is a two-stage curriculum in the manner of SuperBPE.
+With ``whole_word_phrases=True`` the cross-word stage only joins tokens that are
+each a whole word (or a phrase of whole words), so a multi-word macro never
+starts or ends inside a word.
 
 ``greedy`` requires every merge to append one base token to an existing entry,
 so the vocabulary is prefix-closed, and segments left to right by longest
@@ -65,6 +68,24 @@ def _word_separated_text(ids: Sequence[int], word_starts: np.ndarray) -> str:
     values = np.asarray(ids, dtype=np.int64) + _CHAR_OFFSET
     starts = np.flatnonzero(np.asarray(word_starts, dtype=bool)[1:]) + 1
     values = np.insert(values, starts, ord(_WORD_SEPARATOR))
+    return values.astype("<u4").tobytes().decode("utf-32-le")
+
+
+def _phrase_separated_text(
+    ids: Sequence[int], word_starts: np.ndarray, unit_lengths: np.ndarray
+) -> str:
+    """Stage-one IDs as characters, separated wherever two neighbours are not both
+    whole words (a token covering exactly one or more complete pre-tokens)."""
+    ids = np.asarray(ids, dtype=np.int64)
+    if not len(ids):
+        return ""
+    widths = unit_lengths[ids]
+    ends = np.cumsum(widths)
+    begins = ends - widths
+    starts = np.append(np.asarray(word_starts, dtype=bool), True)
+    whole = starts[begins] & starts[ends]
+    cut = np.flatnonzero(~(whole[:-1] & whole[1:])) + 1
+    values = np.insert(ids + _CHAR_OFFSET, cut, ord(_WORD_SEPARATOR))
     return values.astype("<u4").tobytes().decode("utf-32-le")
 
 
@@ -201,6 +222,7 @@ class MacroTokenizer:
         segmentation: str = "bpe",
         word_bounded_merges: int = 0,
         word_bounded: bool = False,
+        whole_word_phrases: bool = False,
     ):
         base_vocab = base.get_vocab_size()
         if base_vocab > MAX_BASE_VOCAB_SIZE:
@@ -219,11 +241,14 @@ class MacroTokenizer:
                 raise ValueError("bpe segmentation bounds words with word_bounded_merges")
             if not 0 <= self.word_bounded_merges <= len(self.merges):
                 raise ValueError("word_bounded_merges must be between 0 and the merges")
+            if whole_word_phrases and not self.word_bounded_merges:
+                raise ValueError("whole_word_phrases needs a word-bounded first stage")
             self.word_bounded = self.word_bounded_merges > 0
         else:
-            if self.word_bounded_merges:
+            if self.word_bounded_merges or whole_word_phrases:
                 raise ValueError("greedy segmentation bounds words with word_bounded")
             self.word_bounded = bool(word_bounded)
+        self.whole_word_phrases = bool(whole_word_phrases)
 
         decompositions: list[tuple[int, ...]] = [(i,) for i in range(base_vocab)]
         for index, (left, right) in enumerate(self.merges):
@@ -306,7 +331,10 @@ class MacroTokenizer:
             i for i in range(alphabet) if decompositions[i][-1] in line_breaks
         ]
         _configure_macro_stage(
-            stage2, specials, base_ids_to_text(ends_line), word_bounded=False
+            stage2,
+            specials,
+            base_ids_to_text(ends_line),
+            word_bounded=self.whole_word_phrases,
         )
         self._stage2 = stage2
 
@@ -371,6 +399,8 @@ class MacroTokenizer:
                 values["segmentation"] = self.segmentation
                 if self.segmentation == "bpe":
                     values["word_bounded_merges"] = self.word_bounded_merges
+                    if self.whole_word_phrases:
+                        values["whole_word_phrases"] = True
                 else:
                     values["word_bounded"] = self.word_bounded
             values["merges"] = self.merges
@@ -440,7 +470,14 @@ class MacroTokenizer:
                 for encoding in self._stage1.encode_batch(texts, add_special_tokens=False)
             ]
         if self._stage2 is not None:
-            texts = [base_ids_to_text(sequence) for sequence in ids]
+            texts = (
+                [
+                    _phrase_separated_text(sequence, starts, self.unit_lengths)
+                    for sequence, starts in zip(ids, word_starts)
+                ]
+                if self.whole_word_phrases
+                else [base_ids_to_text(sequence) for sequence in ids]
+            )
             ids = [
                 encoding.ids
                 for encoding in self._stage2.encode_batch(texts, add_special_tokens=False)
@@ -508,6 +545,7 @@ class MacroTokenizer:
             options["segmentation"] = values["segmentation"]
             if values["segmentation"] == "bpe":
                 options["word_bounded_merges"] = values["word_bounded_merges"]
+                options["whole_word_phrases"] = values.get("whole_word_phrases", False)
             else:
                 options["word_bounded"] = values["word_bounded"]
         tokenizer = cls(

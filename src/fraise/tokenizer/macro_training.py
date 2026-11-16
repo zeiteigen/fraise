@@ -25,6 +25,7 @@ from .macro import (
     SEGMENTATIONS,
     MacroTokenizer,
     _configure_macro_stage,
+    _phrase_separated_text,
     _segmenting_tokenizer,
     _word_separated_text,
     base_ids_to_text,
@@ -53,6 +54,7 @@ def train_macro_tokenizer(
     segmentation: str = "bpe",
     word_bounded_vocab_size: int | None = None,
     word_bounded: bool = False,
+    whole_word_phrases: bool = False,
     merges_per_round: int = DEFAULT_MERGES_PER_ROUND,
 ) -> MacroTokenizer:
     """Learn macros over ``base`` until ``vocab_size`` entries exist.
@@ -78,6 +80,8 @@ def train_macro_tokenizer(
         word_bounded_vocab_size = min(word_bounded_vocab_size, vocab_size)
     if word_bounded and segmentation != "greedy":
         raise ValueError("word_bounded applies to greedy segmentation")
+    if whole_word_phrases and word_bounded_vocab_size is None:
+        raise ValueError("whole_word_phrases needs word_bounded_vocab_size")
     integer("merges_per_round", merges_per_round, 1)
     if not sources or not any(len(source) for source in sources.values()):
         raise ValueError("macro tokenizer training requires non-empty text sources")
@@ -105,6 +109,7 @@ def train_macro_tokenizer(
         max_macro_length,
         max_bytes_per_source,
         min_frequency,
+        whole_word_phrases,
     )
 
 
@@ -194,8 +199,10 @@ def _train_word_bounded_bpe(
     max_macro_length,
     max_bytes_per_source,
     min_frequency,
+    whole_word_phrases=False,
 ):
-    """Word-bounded merges first; then, if room is left, merges across words."""
+    """Word-bounded merges first; then, if room is left, merges across words
+    (only between whole words when ``whole_word_phrases``)."""
     base_vocab = base.get_vocab_size()
     specials = special_base_ids(base)
     special_set = set(specials)
@@ -242,7 +249,7 @@ def _train_word_bounded_bpe(
     ]
     stage2 = Tokenizer(BPE())
     _configure_macro_stage(
-        stage2, specials, base_ids_to_text(ends_line), word_bounded=False
+        stage2, specials, base_ids_to_text(ends_line), word_bounded=whole_word_phrases
     )
     trainer = _bpe_trainer(
         vocab_size + _STAGE_TWO_SLACK,
@@ -259,8 +266,12 @@ def _train_word_bounded_bpe(
             encoded = word_bounded._macro_ids(
                 [ids_ for ids_, _ in chunk], [starts for _, starts in chunk]
             )
-            for macro_ids in encoded:
-                handle.write(base_ids_to_text(macro_ids))
+            for macro_ids, (_, starts) in zip(encoded, chunk):
+                handle.write(
+                    _phrase_separated_text(macro_ids, starts, word_bounded.unit_lengths)
+                    if whole_word_phrases
+                    else base_ids_to_text(macro_ids)
+                )
                 handle.write("\n")
 
     symbols = {base_ids_to_text([i]): i for i in range(alphabet)}
@@ -285,6 +296,7 @@ def _train_word_bounded_bpe(
         max_macro_length=max_macro_length,
         boundary_ids=boundaries,
         word_bounded_merges=split,
+        whole_word_phrases=whole_word_phrases,
     )
 
 

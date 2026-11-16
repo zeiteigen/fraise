@@ -28,6 +28,10 @@ def tokenizers():
         "curriculum": train_macro_tokenizer(
             base, SOURCE, 340, max_macro_length=4, word_bounded_vocab_size=310
         ),
+        "phrases": train_macro_tokenizer(
+            base, SOURCE, 340, max_macro_length=4, word_bounded_vocab_size=310,
+            whole_word_phrases=True,
+        ),
         "greedy": train_macro_tokenizer(
             base, SOURCE, 340, max_macro_length=4, segmentation="greedy",
             merges_per_round=8,
@@ -64,7 +68,11 @@ class MacroSegmentationTests(unittest.TestCase):
         base_count = len(self.base.encode(text).ids)
         for name, macro in self.variants.items():
             with self.subTest(name=name):
-                self.assertEqual(macro.get_vocab_size(), 340)
+                # Whole-word phrases run out of frequent pairs on this tiny corpus.
+                if name == "phrases":
+                    self.assertGreater(macro.get_vocab_size(), 310)
+                else:
+                    self.assertEqual(macro.get_vocab_size(), 340)
                 self.assertLess(len(macro.encode(text).ids), base_count)
         self.assertEqual(self.variants["curriculum"].word_bounded_merges, 30)
 
@@ -90,6 +98,25 @@ class MacroSegmentationTests(unittest.TestCase):
             if " " in self.variants["cross"].decode([macro_id]).strip()
         ]
         self.assertTrue(crosses)
+
+    def test_whole_word_phrases_never_split_a_word(self):
+        macro = self.variants["phrases"]
+        self.assertTrue(macro.whole_word_phrases)
+        spanning = 0
+        for text in PROBES:
+            base = self.base.encode(text, add_special_tokens=False)
+            starts = list(macro.word_starts(base.ids)) + [True]
+            cursor = 0
+            for macro_id in macro.encode(text, add_special_tokens=False).ids:
+                width = int(macro.unit_lengths[macro_id])
+                if any(starts[cursor + 1 : cursor + width]):
+                    spanning += 1
+                    with self.subTest(text=text, cursor=cursor):
+                        self.assertTrue(starts[cursor] and starts[cursor + width])
+                cursor += width
+        self.assertGreater(spanning, 0)
+        # The unrestricted curriculum does make macros that split words.
+        self.assertFalse(self.variants["curriculum"].whole_word_phrases)
 
     def test_greedy_vocabularies_are_prefix_closed(self):
         for name in ("greedy", "greedy-words"):
@@ -124,6 +151,7 @@ class MacroSegmentationTests(unittest.TestCase):
                 self.assertEqual(restored.to_str(), macro.to_str())
                 self.assertEqual(restored.segmentation, macro.segmentation)
                 self.assertEqual(restored.word_bounded, macro.word_bounded)
+                self.assertEqual(restored.whole_word_phrases, macro.whole_word_phrases)
                 text = PROBES[3]
                 self.assertEqual(restored.encode(text).ids, macro.encode(text).ids)
         self.assertIn('"format_version":1', self.variants["cross"].to_str())

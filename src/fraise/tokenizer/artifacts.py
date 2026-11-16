@@ -60,6 +60,7 @@ def create_macro_tokenizer(
     segmentation: str = "bpe",
     word_bounded_vocab_size: int | None = None,
     word_bounded: bool = False,
+    whole_word_phrases: bool = False,
 ):
     """Train or reuse macro merges over ``base``; returns the artifact path."""
     from .macro_training import train_macro_tokenizer
@@ -84,6 +85,9 @@ def create_macro_tokenizer(
     if word_bounded_vocab_size is not None:
         request["word_bounded_vocab_size"] = word_bounded_vocab_size
         prefix += f"-words{word_bounded_vocab_size}"
+    if whole_word_phrases:
+        request["whole_word_phrases"] = True
+        prefix += "-phrases"
     return _create_artifact(
         directory,
         request,
@@ -97,6 +101,7 @@ def create_macro_tokenizer(
             segmentation=segmentation,
             word_bounded_vocab_size=word_bounded_vocab_size,
             word_bounded=word_bounded,
+            whole_word_phrases=whole_word_phrases,
         ),
     )
 

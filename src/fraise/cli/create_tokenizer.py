@@ -57,6 +57,12 @@ def main(argv=None):
         action="store_true",
         help="greedy: never extend a macro across a word start",
     )
+    parser.add_argument(
+        "--whole-word-phrases",
+        action="store_true",
+        help="bpe with --word-bounded-vocab-size: cross-word merges join whole "
+        "words only, so no macro starts or ends inside a word",
+    )
     add_data_dir(parser)
     args = parser.parse_args(argv)
     with cli_errors(parser):
@@ -90,6 +96,7 @@ def main(argv=None):
                     segmentation=args.segmentation,
                     word_bounded_vocab_size=args.word_bounded_vocab_size,
                     word_bounded=args.word_bounded,
+                    whole_word_phrases=args.whole_word_phrases,
                 )
             )
             return

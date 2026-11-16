@@ -1,8 +1,9 @@
 """Measure a level-2 tokenizer on the problems the vault names.
 
-Usage: tokenizer_stats.py TOKENIZER.json EVENTS.jsonl [DETAILS.json] [DATA_DIR]
+Usage: tokenizer_stats.py TOKENIZER.json EVENTS.jsonl [--details DETAILS.json]
+                          [--data-dir DATA_DIR] [--prefix tok/]
 
-Appends one line of metrics (step 0) to EVENTS.jsonl. The held-out and training text are
+Appends one line of metrics (step 0) to EVENTS.jsonl, keys under PREFIX. The held-out and training text are
 the raw caches a training run with the 8k base tokenizer leaves under DATA_DIR (default
 data/experiments/poc-fineweb): run it after one.
 
@@ -12,6 +13,8 @@ included as in training):
   multi-word        share of vocabulary entries whose text holds a space or newline after
                     its first character (as token_lengths.py), and share of running-text
                     tokens / base tokens inside a token spanning two or more base pre-tokens
+  fragments         share of running-text tokens that span two or more pre-tokens but start
+                    or end inside one (" of t", "ing the"): cross-word but not whole words
   unforced          share of token boundaries (not forced by a special or a line break) where
                     the token plus the next base token is itself a vocabulary entry: the
                     boundary was not decided by the next base token alone. `allowed` also
@@ -24,16 +27,21 @@ On the first 10M base tokens of the 50M training selection:
                     tokens whose entry is used < 100 times (rarely trained embedding rows)
 Plain (non-macro) tokenizers report compression, multi-word and usage only.
 """
-import glob, json, os, sys, time
+import argparse, glob, json, os, sys, time
 import numpy as np
 from datasets import Dataset
 from fraise.tokenizer.loading import load_tokenizer
 from fraise.tokenizer.macro import word_starts_from_word_ids
 from fraise.training.validation.measures import base_byte_lengths
 
-path, events = sys.argv[1], sys.argv[2]
-details_path = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
-E = sys.argv[4] if len(sys.argv) > 4 else "data/experiments/poc-fineweb"
+cli = argparse.ArgumentParser()
+cli.add_argument("tokenizer")
+cli.add_argument("events")
+cli.add_argument("--details")
+cli.add_argument("--data-dir", default="data/experiments/poc-fineweb")
+cli.add_argument("--prefix", default="tok/")
+args = cli.parse_args()
+path, events, details_path, E, P = args.tokenizer, args.events, args.details, args.data_dir, args.prefix
 tok = load_tokenizer(path)
 base = load_tokenizer(f"{E}/tokenizers/bpe-8k.json")
 from fraise.tokenizer.loading import tokenizer_fingerprint
@@ -75,7 +83,7 @@ vocab_multiword = sum(any(c in t[1:] for c in " \n") for t in entry_texts) / len
 
 # Held-out text.
 n_base = n_tok = n_bytes = 0
-multi_tok = multi_base = 0
+multi_tok = multi_base = fragment_tok = 0
 boundaries = unforced = unforced_allowed = 0
 special = np.zeros(base.get_vocab_size(), dtype=bool)
 if is_macro:
@@ -98,6 +106,9 @@ for start in range(0, len(valid), 500):
         for k, (b0, w) in enumerate(zip(begins.tolist(), widths.tolist())):
             if w > 1 and starts[b0 + 1:b0 + w].any():
                 multi_tok += 1; multi_base += w
+                ends_word = b0 + w >= len(ids) or starts[b0 + w]
+                if not (starts[b0] and ends_word):
+                    fragment_tok += 1
             e = b0 + w
             if e >= len(ids):
                 continue
@@ -122,6 +133,8 @@ if is_macro:
     metrics.update({
         "tok/text_share_multiword_tokens": multi_tok / n_tok,
         "tok/text_share_base_in_multiword": multi_base / n_base,
+        "tok/text_share_fragment_tokens": fragment_tok / n_tok,
+        "tok/multiword_share_fragments": fragment_tok / max(multi_tok, 1),
         "tok/unforced_boundaries": unforced / boundaries,
         "tok/unforced_boundaries_allowed": unforced_allowed / boundaries,
         "tok/max_token_length": int(tok.max_macro_length),
@@ -178,6 +191,7 @@ metrics.update({
     "tok/train_tokens_per_10m_base": n_train_tok,
 })
 metrics["tok/seconds"] = time.time() - t0
+metrics = {(P + k[4:] if k.startswith("tok/") else k): v for k, v in metrics.items()}
 print(json.dumps(metrics, indent=1))
 with open(events, "a") as f:
     f.write(json.dumps(metrics) + "\n")

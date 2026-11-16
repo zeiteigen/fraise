@@ -5,8 +5,11 @@
 #   bash experiments/level2/colab.sh ARCH-TOKENIZER
 #
 # ARCH:      hier (Hierarchical-only 64k, both fixes) or fraise (Fraise 64/8, sweep settings)
-# TOKENIZER: current | wordbpe | greedy-cross   (committed under tokenizers/)
-#            greedy-words | curriculum          (trained here, on the same 0.3 GB of FineWeb-Edu)
+# TOKENIZER: current | greedy-cross | wordbpe   (committed under tokenizers/)
+#            curriculum40k | phrases40k | curriculum | greedy-words
+#                                               (trained here, on the same 0.3 GB of FineWeb-Edu)
+# REFS (environment, optional): committed tokenizers to measure as well, e.g. "hierarchical-64k",
+# logged under ref-<name>/ in the same run.
 #
 # Writes experiments/level2/out/: events.jsonl (training metrics, then the tokenizer's tok/*
 # measurements), training.log, model_meta.json, tokenizer.json and tokstats.json.
@@ -43,6 +46,8 @@ case $TOK in
   greedy-cross) TOKFILE=$HERE/tokenizers/greedy-cross-64k.json ;;
   greedy-words) TOKFILE=$(make_tokenizer --segmentation greedy --word-bounded) ;;
   curriculum) TOKFILE=$(make_tokenizer --word-bounded-vocab-size 58982) ;;
+  curriculum40k) TOKFILE=$(make_tokenizer --word-bounded-vocab-size 40000) ;;
+  phrases40k) TOKFILE=$(make_tokenizer --word-bounded-vocab-size 40000 --whole-word-phrases) ;;
   *) echo "unknown tokenizer $TOK" >&2; exit 2 ;;
 esac
 cp "$TOKFILE" "$OUT/tokenizer.json"
@@ -62,5 +67,9 @@ cp "$OUT/runs/$VARIANT/training.log" "$OUT/runs/$VARIANT/model_meta.json" "$OUT/
 
 echo "== measure tokenizer $(date -u +%T)"
 uv run --frozen python "$HERE/tokenizer_stats.py" "$OUT/tokenizer.json" "$OUT/events.jsonl" \
-  "$OUT/tokstats.json" "$D"
+  --details "$OUT/tokstats.json" --data-dir "$D"
+for ref in ${REFS:-}; do
+  uv run --frozen python "$HERE/tokenizer_stats.py" "$HERE/tokenizers/$ref.json" "$OUT/events.jsonl" \
+    --details "$OUT/tokstats-$ref.json" --data-dir "$D" --prefix "ref-$ref/"
+done
 echo "== done $(date -u +%T)"
