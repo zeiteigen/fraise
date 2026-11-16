@@ -39,6 +39,24 @@ def main(argv=None):
         default=DEFAULT_MAX_MACRO_LENGTH,
         help="maximum base tokens per macro (with --base-tokenizer)",
     )
+    parser.add_argument(
+        "--segmentation",
+        choices=("bpe", "greedy"),
+        default="bpe",
+        help="macro segmentation: BPE merge replay, or greedy longest match over "
+        "a prefix-closed vocabulary (with --base-tokenizer)",
+    )
+    parser.add_argument(
+        "--word-bounded-vocab-size",
+        type=int,
+        help="bpe: learn this many entries with merges kept inside words, then "
+        "merge across words up to --vocab-size (equal to it: word-bounded only)",
+    )
+    parser.add_argument(
+        "--word-bounded",
+        action="store_true",
+        help="greedy: never extend a macro across a word start",
+    )
     add_data_dir(parser)
     args = parser.parse_args(argv)
     with cli_errors(parser):
@@ -69,6 +87,9 @@ def main(argv=None):
                     directory,
                     max_macro_length=args.max_macro_length,
                     max_bytes_per_source=args.max_bytes_per_source,
+                    segmentation=args.segmentation,
+                    word_bounded_vocab_size=args.word_bounded_vocab_size,
+                    word_bounded=args.word_bounded,
                 )
             )
             return

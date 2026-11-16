@@ -57,6 +57,9 @@ def create_macro_tokenizer(
     *,
     max_macro_length: int,
     max_bytes_per_source=None,
+    segmentation: str = "bpe",
+    word_bounded_vocab_size: int | None = None,
+    word_bounded: bool = False,
 ):
     """Train or reuse macro merges over ``base``; returns the artifact path."""
     from .macro_training import train_macro_tokenizer
@@ -71,16 +74,29 @@ def create_macro_tokenizer(
         "min_frequency": MIN_FREQUENCY,
         "max_bytes_per_source": max_bytes_per_source,
     }
+    # Only non-default segmentations enter the request, so existing artifacts
+    # keep matching their original requests.
+    prefix = f"fraise-macro-{vocab_size}"
+    if segmentation != "bpe":
+        request["segmentation"] = segmentation
+        request["word_bounded"] = word_bounded
+        prefix += f"-{segmentation}" + ("-words" if word_bounded else "")
+    if word_bounded_vocab_size is not None:
+        request["word_bounded_vocab_size"] = word_bounded_vocab_size
+        prefix += f"-words{word_bounded_vocab_size}"
     return _create_artifact(
         directory,
         request,
-        f"fraise-macro-{vocab_size}",
+        prefix,
         lambda: train_macro_tokenizer(
             base,
             sources,
             vocab_size,
             max_macro_length=max_macro_length,
             max_bytes_per_source=max_bytes_per_source,
+            segmentation=segmentation,
+            word_bounded_vocab_size=word_bounded_vocab_size,
+            word_bounded=word_bounded,
         ),
     )
 
